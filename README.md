@@ -51,7 +51,7 @@ set floors. Browser QA needs your consent each time and always runs headless wit
 ### Claude Code plugin (skills + agents + hooks)
 
 ```
-/plugin marketplace add <owner>/agent-verify-loop
+/plugin marketplace add dmytromykhailiuk/agent-verify-loop
 /plugin install agent-verify-loop@agent-verify-loop
 ```
 
@@ -62,7 +62,7 @@ type. Optionally pre-approve the CLI with `vloop setup --agent claude --only per
 ### Codex plugin (skills + hooks)
 
 ```
-codex plugin marketplace add <owner>/agent-verify-loop
+codex plugin marketplace add dmytromykhailiuk/agent-verify-loop
 ```
 
 Install `agent-verify-loop` from `/plugins`, then add the custom agents (Codex plugins can't ship them):
@@ -88,7 +88,7 @@ Codex notes:
 ### skills.sh (skills only, any agent)
 
 ```
-npx skills add <owner>/agent-verify-loop -g -a claude-code -a codex
+npx skills add dmytromykhailiuk/agent-verify-loop -g -a claude-code -a codex
 ```
 
 skills.sh copies only the skill folders, so install the agents, hooks and permissions once:
@@ -180,7 +180,7 @@ Metrics count tokens and time for both platforms. USD is shown only for models l
 
 ## Integration with agent-vault
 
-[agent-vault](https://github.com/<owner>/agent-vault) is optional. Both CLIs answer `version --json` with a `contract`
+[agent-vault](https://github.com/dmytromykhailiuk/agent-vault) is optional. Both CLIs answer `version --json` with a `contract`
 number (currently 1) so each can check the other.
 
 - **With it:** reviewer and QA task files carry vault notes covering the changed code and lessons from past retros;
