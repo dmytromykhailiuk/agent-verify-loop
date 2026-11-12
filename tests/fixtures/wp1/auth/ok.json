@@ -1,0 +1,3 @@
+{"cookies": [{"name": "sid", "value": "SECRET-COOKIE-VALUE", "domain": "localhost", "path": "/", "expires": 4102444800, "httpOnly": true, "secure": true, "sameSite": "Lax"},
+             {"name": "sess", "value": "x", "domain": "localhost", "path": "/", "expires": -1}],
+ "origins": [{"origin": "https://localhost:8100", "localStorage": [{"name": "token", "value": "SECRET-LS-VALUE"}]}]}

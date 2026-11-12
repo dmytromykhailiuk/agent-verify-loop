@@ -1,0 +1,266 @@
+{
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "role",
+    "verdict",
+    "summary",
+    "findings",
+    "suggestions"
+  ],
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "enum": [
+        2
+      ]
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "reviewer"
+      ]
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "attempt": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "full",
+        "recheck",
+        "delta"
+      ]
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "inconclusive"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "severity",
+          "confidence",
+          "category",
+          "title",
+          "problem"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^R[0-9]+$"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "correctness",
+              "security",
+              "data",
+              "contract",
+              "acceptance",
+              "convention",
+              "build",
+              "tests",
+              "performance",
+              "maintainability",
+              "other"
+            ]
+          },
+          "file": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "end_line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "problem": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "scenario": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "suggestion": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "criterion": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "convention_ref": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "command": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "still_present",
+              "fixed",
+              "withdrawn"
+            ]
+          },
+          "missed_earlier": {
+            "type": "boolean"
+          },
+          "missed_reason": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      }
+    },
+    "suggestions": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "text"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^S[0-9]+$"
+          },
+          "file": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      }
+    },
+    "rechecked": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "still_present",
+              "fixed",
+              "withdrawn"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "dispute_ruling": {
+            "type": "string",
+            "enum": [
+              "upheld",
+              "accepted",
+              "n/a"
+            ]
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "files_reviewed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_skipped": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 500
+        }
+      }
+    }
+  }
+}

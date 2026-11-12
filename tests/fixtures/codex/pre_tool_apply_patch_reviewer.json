@@ -1,0 +1,15 @@
+{
+  "session_id": "{sid}",
+  "transcript_path": "{home}/.codex/sessions/2026/11/11/rollout-2026-11-11T10-00-00-{sid}.jsonl",
+  "cwd": "{cwd}",
+  "model": "gpt-5-codex",
+  "hook_event_name": "PreToolUse",
+  "turn_id": "turn-1",
+  "tool_name": "apply_patch",
+  "tool_use_id": "call_1",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: a.js\n@@\n-a\n+evil\n*** End Patch\n"
+  },
+  "agent_id": "agent-rev-1",
+  "agent_type": "verify-reviewer"
+}

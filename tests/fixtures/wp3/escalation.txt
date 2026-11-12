@@ -1,0 +1,11 @@
+verify-loop · ESCALATION · 3 failed attempts · 27m00s · run 20261015-122001-demo-3fa9
+Still failing:
+  R1 [major·stuck] src/publisher.ts:3 — Retry counter never resets (raised #1, still #2,#3; disputed: "counter is reset in finally"; reviewer upheld: "finally block never runs on throw")
+  Q2 [blocker] C2 — Next button does nothing … evidence: shot.png (raised #3)
+Tried: #2 R1: attempt 2 change in publish() xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… · #3 R1: attempt 3 change in publish() xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…
+Unverified: C4 (auth_expired)
+next: show this report to the user and ask with AskUserQuestion (header "Verify loop"):
+  Try 3 more attempts → {{vloop}} decide retry --run 20261015-122001-demo-3fa9 [--note "<user text>"]
+  Waive disputed/stuck findings → {{vloop}} decide waive --run 20261015-122001-demo-3fa9 --ids R1 [--note …]
+  Accept as is → {{vloop}} decide accept --run 20261015-122001-demo-3fa9
+  Stop, I'll take over → {{vloop}} decide stop --run 20261015-122001-demo-3fa9

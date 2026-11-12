@@ -1,0 +1,4 @@
+{"session_id": "SID", "transcript_path": "/dev/null", "cwd": "CWD", "hook_event_name": "PostToolUse", "tool_name": "Bash",
+ "tool_input": {"command": "sed -i '' 's/a/b/' lib/sum.js", "description": "edit"},
+ "tool_response": {"stdout": "", "stderr": "", "interrupted": false, "isImage": false,
+                   "bashEditDiff": {"files": [{"filePath": "FILE", "hunks": []}], "moreFiles": 0, "changedFiles": ["FILE"]}}}

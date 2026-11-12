@@ -1,0 +1,317 @@
+{
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "run_id",
+    "attempt",
+    "kind",
+    "result",
+    "escalate",
+    "roles",
+    "findings",
+    "suggestions",
+    "unverified",
+    "warnings",
+    "failed_attempts",
+    "inconclusive_streak",
+    "max_failed",
+    "status_line"
+  ],
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "loop",
+        "standalone",
+        "retro"
+      ]
+    },
+    "result": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "inconclusive"
+      ]
+    },
+    "escalate": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "reviewer": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "state",
+            "carried",
+            "carried_from",
+            "verdict_path",
+            "blocking",
+            "minor",
+            "suggestions",
+            "downgraded",
+            "reasons"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "pass",
+                "fail",
+                "inconclusive",
+                "skipped"
+              ]
+            },
+            "carried": {
+              "type": "boolean"
+            },
+            "carried_from": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "verdict_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "blocking": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minor": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "suggestions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "downgraded": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "modified_files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "qa": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "state",
+            "carried",
+            "carried_from",
+            "verdict_path",
+            "blocking",
+            "minor",
+            "suggestions",
+            "downgraded",
+            "reasons"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "pass",
+                "fail",
+                "inconclusive",
+                "skipped"
+              ]
+            },
+            "carried": {
+              "type": "boolean"
+            },
+            "carried_from": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "verdict_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "blocking": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minor": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "suggestions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "downgraded": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "modified_files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "role",
+          "id",
+          "severity",
+          "blocking",
+          "late",
+          "stuck",
+          "waived",
+          "title"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "reviewer",
+              "qa"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "late": {
+            "type": "boolean"
+          },
+          "stuck": {
+            "type": "boolean"
+          },
+          "waived": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "role",
+          "id",
+          "text"
+        ]
+      }
+    },
+    "unverified": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "check_id",
+          "need",
+          "how_to_fix"
+        ]
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "browser_consent": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "failed_attempts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "inconclusive_streak": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_failed": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "elapsed_s": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "status_line": {
+      "type": "string"
+    }
+  }
+}

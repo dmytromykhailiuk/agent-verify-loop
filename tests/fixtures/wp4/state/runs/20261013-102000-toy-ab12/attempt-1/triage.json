@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "role": "triage",
+  "run_id": "20261013-102000-toy-ab12",
+  "attempt": 1,
+  "source": "triage",
+  "change_size": "medium",
+  "risk": "medium",
+  "qa": {
+    "scope": "run",
+    "reason": "<r>",
+    "focus": [],
+    "needs_login": false
+  },
+  "review": {
+    "tier": "standard",
+    "reason": "<r>",
+    "focus": []
+  },
+  "confidence": "high",
+  "agent": {
+    "model": "claude-haiku-5-5",
+    "duration_s": 6.1,
+    "cost_usd": 0.004,
+    "tokens": {
+      "input": 2,
+      "cache_write": 9120,
+      "cache_read": 0,
+      "output": 310
+    },
+    "error": null
+  }
+}

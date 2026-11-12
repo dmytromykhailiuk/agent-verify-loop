@@ -1,0 +1,8 @@
+{
+  "change_size": "small",
+  "risk": "low",
+  "qa": {"scope": "checks", "reason": "service logic only; related tests cover it", "focus": ["sum handles negatives"],
+         "needs_login": false},
+  "review": {"tier": "standard", "reason": "small service change", "focus": ["edge cases"]},
+  "confidence": "high"
+}

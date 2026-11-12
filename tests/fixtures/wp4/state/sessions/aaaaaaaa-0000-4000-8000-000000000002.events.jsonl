@@ -1,0 +1,11 @@
+{"ts":"2026-10-13T11:00:00.000Z","sid":"aaaaaaaa-0000-4000-8000-000000000002","event":"prompt","repo":"abc123abc123","run":null,"attempt":null,"data":{"chars":5,"task":1}}
+{"ts":"2026-10-13T11:10:00.000Z","sid":"aaaaaaaa-0000-4000-8000-000000000002","event":"gate_warn","repo":"abc123abc123","run":null,"attempt":null,"data":{"repos":["k2"],"files":2,"fp":"f2","n":0}}
+{"ts":"2026-10-13T11:11:00.000Z","sid":"aaaaaaaa-0000-4000-8000-000000000002","event":"gate_block","repo":"abc123abc123","run":null,"attempt":null,"data":{"repos":["k2"],"files":2,"fp":"f2","n":1}}
+{"ts":"2026-10-13T11:12:00.000Z","sid":"aaaaaaaa-0000-4000-8000-000000000002","event":"gate_ignored","repo":"abc123abc123","run":null,"attempt":null,"data":{"repos":["k2"],"files":2,"fp":"f2","n":2}}
+{"ts":"2026-10-13T11:13:00.000Z","sid":"aaaaaaaa-0000-4000-8000-000000000002","event":"gate_defer","repo":"abc123abc123","run":null,"attempt":null,"data":{"reason":"question"}}
+{"ts":"2026-10-13T11:14:00.000Z","sid":"aaaaaaaa-0000-4000-8000-000000000002","event":"gate_defer","repo":"abc123abc123","run":null,"attempt":null,"data":{"reason":"defer-cmd"}}
+{"ts":"2026-10-13T11:15:00.000Z","sid":"aaaaaaaa-0000-4000-8000-000000000002","event":"gate_skip_docs","repo":"abc123abc123","run":null,"attempt":null,"data":{"files":["README.md"]}}
+{"ts":"2026-10-13T11:16:00.000Z","sid":"aaaaaaaa-0000-4000-8000-000000000002","event":"skip","repo":"abc123abc123","run":null,"attempt":null,"data":{"reason":"user said no","by":"user"}}
+{"ts":"2026-10-13T15:00:00.000Z","sid":"aaaaaaaa-0000-4000-8000-000000000002","event":"begin","repo":"abc123abc123","run":"r2","attempt":1,"data":{"kind":"loop","files":1,"added":3,"removed":1,"prefilter":"trivial","tree":"x","base_kind":"snapshot","target":"session"}}
+{"ts":"2026-10-01T09:00:00.000Z","sid":"aaaaaaaa-0000-4000-8000-000000000002","event":"gate_warn","repo":"abc123abc123","run":null,"attempt":null,"data":{"repos":["k2"],"files":1,"fp":"old","n":0}}
+{broken

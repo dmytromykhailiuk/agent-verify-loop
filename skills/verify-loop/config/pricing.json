@@ -1,0 +1,14 @@
+{
+  "schema": 1, "currency": "USD", "per_tokens": 1000000,
+  "note": "A model that is not listed here has no USD (null, printed as n/a); add Codex/OpenAI models under models to price them.",
+  "source": "claude-api skill model table (cached 2026-11-03); cache write 1.25x (5m) / 2x (1h); verified against a claude -p haiku run on 2026-10-14",
+  "models": {
+    "claude-opus-5-5":   {"input": 4.00,  "cache_write_5m": 5.00,  "cache_write_1h": 8.00,  "cache_read": 0.20, "output": 20.00},
+    "claude-sonnet-5-5": {"input": 2.00,  "cache_write_5m": 2.50,  "cache_write_1h": 4.00,  "cache_read": 0.10, "output": 10.00},
+    "claude-haiku-5-5":  {"input": 0.10,  "cache_write_5m": 0.125, "cache_write_1h": 0.20,  "cache_read": 0.01, "output": 0.50,
+                          "long_context": {"threshold": 100000, "input": 0.50, "cache_write_5m": 0.625, "cache_write_1h": 1.00, "cache_read": 0.05, "output": 2.50}},
+    "claude-fable-5-2":  {"input": 8.00,  "cache_write_5m": 10.00, "cache_write_1h": 16.00, "cache_read": 0.20, "output": 40.00},
+    "claude-fable-5-1":  {"input": 10.00, "cache_write_5m": 12.50, "cache_write_1h": 20.00, "cache_read": 0.25, "output": 50.00}
+  },
+  "aliases": {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-5-5", "fable": "claude-fable-5-2"}
+}

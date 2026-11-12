@@ -1,0 +1,97 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "change_size",
+    "risk",
+    "qa",
+    "review",
+    "confidence"
+  ],
+  "properties": {
+    "change_size": {
+      "type": "string",
+      "enum": [
+        "small",
+        "medium",
+        "large"
+      ]
+    },
+    "risk": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "qa": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "reason",
+        "focus",
+        "needs_login"
+      ],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": [
+            "none",
+            "checks",
+            "run",
+            "browser"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "focus": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "needs_login": {
+          "type": "boolean"
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tier",
+        "reason",
+        "focus"
+      ],
+      "properties": {
+        "tier": {
+          "type": "string",
+          "enum": [
+            "standard",
+            "deep"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "focus": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "confidence": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    }
+  }
+}

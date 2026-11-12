@@ -1,0 +1,3 @@
+RESULT: INCONCLUSIVE
+verify-loop · attempt 1 · failures 0/3 · review PASS · qa INCONCLUSIVE (agent timeout) · 30m00s
+next: fix the environment if it's simple, then {{vloop}} begin --rerun --run 20261015-122001-demo-3fa9

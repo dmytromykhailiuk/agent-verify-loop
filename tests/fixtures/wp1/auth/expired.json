@@ -1,0 +1,3 @@
+{"cookies": [{"name": "sid", "value": "SECRET-COOKIE-VALUE", "domain": "localhost", "path": "/", "expires": 1600000000},
+             {"name": "sid2", "value": "y", "domain": "localhost", "path": "/", "expires": 1600000500}],
+ "origins": []}

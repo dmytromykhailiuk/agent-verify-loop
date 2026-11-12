@@ -1,0 +1,1 @@
+{"name": "cli-fixture", "bin": {"tool": "bin/tool.js"}, "scripts": {"test": "vitest"}, "devDependencies": {"vitest": "^1.0.0"}}

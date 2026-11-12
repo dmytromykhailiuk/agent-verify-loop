@@ -1,0 +1,21 @@
+{
+  "files": 3,
+  "added": 40,
+  "removed": 12,
+  "changed_lines": 52,
+  "rows": [],
+  "ui_files": [],
+  "risky_files": [],
+  "test_files": [],
+  "config_files": [],
+  "docs_files": [],
+  "ignored_files": [],
+  "new_files": [],
+  "deleted_files": [],
+  "renamed_files": [],
+  "new_source_files": [],
+  "source_files": [
+    "src/a.ts"
+  ],
+  "docs_only": false
+}

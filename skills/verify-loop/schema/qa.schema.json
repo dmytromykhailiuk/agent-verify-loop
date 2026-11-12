@@ -1,0 +1,336 @@
+{
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "role",
+    "verdict",
+    "summary",
+    "checks",
+    "findings"
+  ],
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "enum": [
+        2
+      ]
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "qa"
+      ]
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "attempt": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "full",
+        "recheck",
+        "delta"
+      ]
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "checks",
+        "run",
+        "browser"
+      ]
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "inconclusive"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "criterion",
+          "method",
+          "result"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^C[0-9]+$"
+          },
+          "criterion": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "static",
+              "test",
+              "build",
+              "cli",
+              "http",
+              "browser"
+            ]
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "skip",
+              "blocked"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 1000
+            }
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "need": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "auth_missing",
+              "auth_expired",
+              "app_not_running",
+              "secrets_missing",
+              "env",
+              null
+            ]
+          },
+          "logged_in": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "severity",
+          "confidence",
+          "category",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^Q[0-9]+$"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "acceptance",
+              "regression",
+              "crash",
+              "build",
+              "data",
+              "security",
+              "ux",
+              "performance",
+              "other"
+            ]
+          },
+          "check_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expected": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "actual": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "repro": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 500
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 1000
+            }
+          },
+          "file": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "command": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "pre_existing": {
+            "type": "string",
+            "enum": [
+              "no",
+              "suspected",
+              "confirmed"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "still_present",
+              "fixed",
+              "withdrawn"
+            ]
+          }
+        }
+      }
+    },
+    "suggestions": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "text"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^QS[0-9]+$"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      }
+    },
+    "unverified": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "need"
+        ],
+        "properties": {
+          "check_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "need": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "auth_missing",
+              "auth_expired",
+              "app_not_running",
+              "secrets_missing",
+              "env",
+              null
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "how_to_fix": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "what": {
+            "type": "string"
+          },
+          "why": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

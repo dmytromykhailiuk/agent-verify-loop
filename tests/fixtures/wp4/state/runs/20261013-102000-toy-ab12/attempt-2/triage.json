@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "role": "triage",
+  "run_id": "20261013-102000-toy-ab12",
+  "attempt": 2,
+  "source": "reused",
+  "change_size": "medium",
+  "risk": "medium",
+  "qa": {
+    "scope": "run",
+    "reason": "<r>",
+    "focus": [],
+    "needs_login": false
+  },
+  "review": {
+    "tier": "standard",
+    "reason": "<r>",
+    "focus": []
+  },
+  "confidence": "high",
+  "agent": null,
+  "reused_from": 1
+}

@@ -1,0 +1,9 @@
+{
+  "name": "verify-loop-qa-toolbox",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Pinned Playwright MCP for the verify-loop QA agent",
+  "dependencies": {
+    "@playwright/mcp": "0.0.83"
+  }
+}

@@ -1,0 +1,5 @@
+{"type":"agent-name","agentName":"verify-review-111","sessionId":"bbbbbbbb-0000-4000-8000-000000000001"}
+{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"u-h1a-10:22:00.000Z","timestamp":"2026-10-13T10:22:00.000Z","requestId":"req-h1a","effort":"medium","sessionId":"bbbbbbbb-0000-4000-8000-000000000001","message":{"id":"h1a","model":"claude-sonnet-5-5","role":"assistant","content":[{"type":"text","text":"<r>"}],"usage":{"input_tokens":5,"cache_creation_input_tokens":2000,"cache_read_input_tokens":10000,"output_tokens":500}}}
+{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"u-h1b-10:28:00.000Z","timestamp":"2026-10-13T10:28:00.000Z","requestId":"req-h1b","effort":"medium","sessionId":"bbbbbbbb-0000-4000-8000-000000000001","message":{"id":"h1b","model":"claude-sonnet-5-5","role":"assistant","content":[{"type":"text","text":"<r>"}],"usage":{"input_tokens":5,"cache_creation_input_tokens":2000,"cache_read_input_tokens":10000,"output_tokens":500}}}
+{"type":"cost-state","sessionId":"bbbbbbbb-0000-4000-8000-000000000001","totalCostUSD":0.42,"totalDuration":400000}
+{broken

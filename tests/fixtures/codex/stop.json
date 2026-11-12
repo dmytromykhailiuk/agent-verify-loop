@@ -1,0 +1,10 @@
+{
+  "session_id": "{sid}",
+  "transcript_path": "{home}/.codex/sessions/2026/11/11/rollout-2026-11-11T10-00-00-{sid}.jsonl",
+  "cwd": "{cwd}",
+  "model": "gpt-5-codex",
+  "hook_event_name": "Stop",
+  "turn_id": "turn-1",
+  "stop_hook_active": false,
+  "last_assistant_message": "Done."
+}

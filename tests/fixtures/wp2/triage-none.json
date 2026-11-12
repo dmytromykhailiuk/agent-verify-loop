@@ -1,0 +1,7 @@
+{
+  "change_size": "small",
+  "risk": "low",
+  "qa": {"scope": "none", "reason": "comment-only change", "focus": [], "needs_login": false},
+  "review": {"tier": "standard", "reason": "comments", "focus": []},
+  "confidence": "high"
+}

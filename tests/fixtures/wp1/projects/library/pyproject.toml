@@ -1,0 +1,7 @@
+[project]
+name = "lib-fixture"
+version = "0.1.0"
+dependencies = ["requests"]
+
+[project.optional-dependencies]
+test = ["pytest"]

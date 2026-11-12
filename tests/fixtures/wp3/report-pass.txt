@@ -1,0 +1,6 @@
+RESULT: PASS
+verify-loop · attempt 1 · failures 0/3 · review PASS · qa PASS (2/2 checks, run) · 2m10s
+Minor: R1 src/publisher.ts:3 — Retry counter never resets
+Suggestions (1 of 1): S1 extract helper
+Browser QA: declined (no-browser, user) — note: staging is down
+next: {{vloop}} retro-plan --run 20261015-122001-demo-3fa9

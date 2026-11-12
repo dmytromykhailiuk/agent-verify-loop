@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Test double for herdr-agent `run` / `wait`. Behaviour comes from FAKE_HERDR_DIR/<role>.json (role = reviewer, qa
+or retro; `wait` uses wait-<role>.json when present):
+  {"exit": 0, "verdict": {...} | null,   # written to <attempt dir>/<role>.json (the path from --prompt)
+   "result": "final message" | null,     # "@verdict" → a message with the verdict in a ```json fence
+   "doc": true, "screen": "…", "stderr": "…"}
+Every call is appended to FAKE_HERDR_DIR/calls.jsonl.
+"""
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+ROLE = {"verify-review": "reviewer", "verify-qa": "qa", "vault-retro": "retro"}
+d = Path(os.environ["FAKE_HERDR_DIR"])
+argv = sys.argv[1:]
+with open(d / "calls.jsonl", "a") as f:
+    f.write(json.dumps({"argv": argv}) + "\n")
+cmd = argv[0]
+if cmd == "run":
+    label = argv[1]
+    role = ROLE[label]
+    hid = f"{label}-1a2b3c"
+    prompt = argv[argv.index("--prompt") + 1]
+    cfgfile = d / f"{role}.json"
+else:  # wait <id>
+    hid = argv[1]
+    role = ROLE[hid.rsplit("-", 1)[0]]
+    prompt = ""
+    cfgfile = d / f"wait-{role}.json"
+    if not cfgfile.exists():
+        cfgfile = d / f"{role}.json"
+    calls = [json.loads(ln)["argv"] for ln in (d / "calls.jsonl").read_text().splitlines()]
+    for c in calls:
+        if c[0] == "run" and ROLE.get(c[1]) == role:
+            prompt = c[c.index("--prompt") + 1]
+cfg = json.loads(cfgfile.read_text())
+m = re.search(r"Your task file is (\S+)\. Read", prompt)
+task = Path(m.group(1)) if m else None
+verdict = cfg.get("verdict")
+if verdict is not None and task is not None and role != "retro":
+    (task.parent / f"{role}.json").write_text(json.dumps(verdict))
+result = cfg.get("result")
+if result == "@verdict":
+    result = "Summary line.\n```json\n" + json.dumps(cfg.get("message_verdict") or verdict) + "\n```\n"
+code = int(cfg.get("exit", 0))
+status = {0: "done", 3: "blocked", 4: "timeout", 5: "dead", 6: "no_result"}.get(code, "error")
+if cfg.get("stderr"):
+    sys.stderr.write(cfg["stderr"] + "\n")
+if cfg.get("doc", True):
+    doc = {"id": hid, "status": status, "tab_id": "t1", "pane_id": "p1", "dir": "/tmp/x", "result_path": "/tmp/x/r",
+           "result": result if code == 0 else None, "session_id": f"sess-{role}"}
+    if code == 3:
+        doc["screen"] = cfg.get("screen", "Do you trust this folder? 1. Yes 2. No")
+    print(json.dumps(doc, indent=2))
+sys.exit(code)

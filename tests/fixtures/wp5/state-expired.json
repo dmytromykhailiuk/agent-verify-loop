@@ -1,0 +1,5 @@
+{"cookies": [
+  {"name": "sid", "value": "x", "domain": "localhost", "path": "/", "expires": 946684800, "httpOnly": true, "secure": true, "sameSite": "Lax"},
+  {"name": "csrf", "value": "y", "domain": "localhost", "path": "/", "expires": 978307200, "httpOnly": false, "secure": false, "sameSite": "Lax"}
+ ],
+ "origins": []}

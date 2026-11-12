@@ -1,0 +1,2 @@
+{"name": "server-fixture", "scripts": {"start": "node server.js", "test": "node --test"},
+ "dependencies": {"express": "^4.19.0"}}

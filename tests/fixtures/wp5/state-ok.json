@@ -1,0 +1,5 @@
+{"cookies": [
+  {"name": "sid", "value": "x", "domain": "localhost", "path": "/", "expires": 4102444800, "httpOnly": true, "secure": true, "sameSite": "Lax"},
+  {"name": "pref", "value": "y", "domain": "localhost", "path": "/", "expires": -1, "httpOnly": false, "secure": false, "sameSite": "Lax"}
+ ],
+ "origins": [{"origin": "https://localhost:8100", "localStorage": [{"name": "token", "value": "z"}]}]}

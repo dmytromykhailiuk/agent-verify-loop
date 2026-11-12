@@ -1,0 +1,26 @@
+{
+  "name": "agent-verify-loop",
+  "owner": {
+    "name": "dmytromykhailiuk"
+  },
+  "metadata": {
+    "description": "Independent verification loop for Claude Code and Codex."
+  },
+  "plugins": [
+    {
+      "name": "agent-verify-loop",
+      "source": "./",
+      "description": "Independent verification loop: skills, triage/reviewer/QA agents and hooks that gate a turn on verification of the code changes.",
+      "version": "0.1.0",
+      "category": "development",
+      "keywords": [
+        "verification",
+        "code-review",
+        "qa",
+        "agents",
+        "skills",
+        "hooks"
+      ]
+    }
+  ]
+}

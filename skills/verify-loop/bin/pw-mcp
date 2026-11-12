@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Playwright MCP launcher for the verify-loop QA agent (spec §2.17).
+
+pw-mcp [--pointer FILE] [--print-cmd]
+
+Pointer resolution: --pointer; else <state>/qa-current/<repo_key>.json for the git toplevel of $CLAUDE_PROJECT_DIR
+or cwd; else the newest qa-current file younger than 2 h; else defaults. Execs the pinned @playwright/mcp CLI from
+the QA toolbox (`vloop setup --install-browser`) with the first Chrome / Chromium / Edge found, else Playwright's chromium.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+
+from vlooplib import config, paths, qatools, util  # noqa: E402
+
+paths.SKILL_DIR = Path(os.path.abspath(__file__)).parent.parent
+
+POINTER_MAX_AGE_S = 2 * 3600
+
+
+def toplevel(path: str) -> str | None:
+    try:
+        r = subprocess.run(["git", "-C", path, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                           timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = r.stdout.strip()
+    return os.path.realpath(out) if r.returncode == 0 and out else None
+
+
+def find_pointer(explicit: str | None, root: str | None) -> dict:
+    if explicit:
+        return util.read_json(Path(explicit), {}) or {}
+    cur = util.state_dir() / "qa-current"
+    if root:
+        key = hashlib.sha1(root.encode("utf-8")).hexdigest()[:12]
+        p = cur / f"{key}.json"
+        if p.is_file():
+            return util.read_json(p, {}) or {}
+    try:
+        files = [p for p in cur.glob("*.json") if time.time() - p.stat().st_mtime < POINTER_MAX_AGE_S]
+    except OSError:
+        files = []
+    if files:
+        return util.read_json(max(files, key=lambda p: p.stat().st_mtime), {}) or {}
+    return {}
+
+
+def build_cmd(pointer: dict, cfg: dict, repo_cfg: dict, browser: qatools.Browser, cli_js: Path) -> list[str]:
+    pw = cfg.get("playwright") or {}
+    out_dir = pointer.get("output_dir") or os.path.join(os.environ.get("TMPDIR") or "/tmp", "verify-pw",
+                                                        str(os.getpid()))
+    cmd = ["node", str(cli_js)]
+    if pw.get("headless", True):
+        cmd.append("--headless")
+    if pw.get("isolated", True):
+        cmd.append("--isolated")
+    configured = str(pw.get("browser") or "chrome")
+    if configured != "chrome":
+        cmd += ["--browser", configured]
+    else:
+        cmd += ["--browser", browser.kind]
+        if browser.executable and (browser.kind != "chrome" or os.path.isfile(browser.executable)):
+            cmd += ["--executable-path", browser.executable]
+    cmd += ["--output-dir", out_dir,
+            "--caps", str(pw.get("caps", "devtools,testing")),
+            "--console-level", str(pw.get("console_level", "warning")),
+            "--viewport-size", str(pointer.get("viewport") or pw.get("viewport", "1366x900")),
+            "--image-responses", str(pw.get("image_responses", "omit")),
+            "--file-paths", str(pw.get("file_paths", "absolute"))]
+    ignore = pointer.get("ignore_https_errors")
+    if ignore is None:
+        ignore = (repo_cfg.get("app") or {}).get("ignore_https_errors")
+    if ignore:
+        cmd.append("--ignore-https-errors")
+    storage = pointer.get("storage_state")
+    if storage and os.path.isfile(storage):
+        cmd += ["--storage-state", storage]
+    return cmd
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="pw-mcp", description="Playwright MCP launcher for verify-loop QA")
+    ap.add_argument("--pointer", default=None, help="pw-pointer.json of the QA attempt")
+    ap.add_argument("--print-cmd", action="store_true", help="print the command as a JSON array and exit")
+    args = ap.parse_args(argv)
+
+    cli_js = qatools.mcp_cli()
+    if not cli_js.is_file():
+        sys.stderr.write(f"pw-mcp: Playwright MCP is not installed; run {util.vloop_cli()} setup --install-browser\n")
+        return 1
+    root = toplevel(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+    pointer = find_pointer(args.pointer, root)
+    cfg = config.load(root)
+    repo_cfg = config.repo_config(root) if root else {}
+    browser = qatools.find_chrome()
+    if not browser.system:
+        sys.stderr.write("pw-mcp: warning: Google Chrome not found; using Playwright's bundled chromium\n")
+    cmd = build_cmd(pointer, cfg, repo_cfg, browser, cli_js)
+    if args.print_cmd:
+        print(json.dumps(cmd, ensure_ascii=False))
+        return 0
+    out_dir = cmd[cmd.index("--output-dir") + 1]
+    os.makedirs(out_dir, exist_ok=True)
+    os.execvp(cmd[0], cmd)
+    return 0  # not reached
+
+
+if __name__ == "__main__":
+    sys.exit(main())

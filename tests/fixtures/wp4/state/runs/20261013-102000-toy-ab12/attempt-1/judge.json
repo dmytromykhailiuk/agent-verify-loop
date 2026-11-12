@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "run_id": "20261013-102000-toy-ab12",
+  "attempt": 1,
+  "kind": "loop",
+  "result": "fail",
+  "escalate": null,
+  "roles": {
+    "reviewer": {
+      "state": "fail",
+      "carried": false,
+      "carried_from": null,
+      "blocking": 1,
+      "minor": 1,
+      "suggestions": 0,
+      "downgraded": 1,
+      "reasons": []
+    },
+    "qa": {
+      "state": "pass",
+      "carried": false,
+      "carried_from": null,
+      "blocking": 0,
+      "minor": 0,
+      "suggestions": 0,
+      "downgraded": 0,
+      "reasons": [],
+      "scope": "run",
+      "checks": {
+        "pass": 3,
+        "fail": 0,
+        "skip": 0,
+        "blocked": 1
+      },
+      "tainted": false
+    }
+  },
+  "findings": [
+    {
+      "role": "reviewer",
+      "id": "R1",
+      "severity": "major",
+      "blocking": true,
+      "late": false,
+      "stuck": false,
+      "waived": false,
+      "downgraded_from": null,
+      "downgrade_reason": null,
+      "category": "correctness",
+      "confidence": "high",
+      "file": "src/a.ts",
+      "line": 10,
+      "title": "<title>",
+      "problem": "<problem>",
+      "scenario": "<scenario>",
+      "suggestion": "",
+      "check_id": null,
+      "expected": null,
+      "actual": null,
+      "repro": [],
+      "evidence": [],
+      "dispute": null
+    },
+    {
+      "role": "reviewer",
+      "id": "R4",
+      "severity": "minor",
+      "blocking": false,
+      "late": false,
+      "stuck": false,
+      "waived": false,
+      "downgraded_from": "major",
+      "downgrade_reason": "no concrete failing scenario",
+      "category": "correctness",
+      "confidence": "high",
+      "file": "src/a.ts",
+      "line": 10,
+      "title": "<title>",
+      "problem": "<problem>",
+      "scenario": "<scenario>",
+      "suggestion": "",
+      "check_id": null,
+      "expected": null,
+      "actual": null,
+      "repro": [],
+      "evidence": [],
+      "dispute": null
+    }
+  ],
+  "suggestions": [],
+  "unverified": [
+    {
+      "check_id": "C4",
+      "criterion": "<c>",
+      "need": "auth_expired",
+      "how_to_fix": "<fix>"
+    }
+  ],
+  "warnings": [],
+  "browser_consent": null,
+  "failed_attempts": 1,
+  "inconclusive_streak": 0,
+  "max_failed": 3,
+  "elapsed_s": 300.0,
+  "status_line": "verify-loop · attempt 1"
+}

@@ -1,0 +1,3 @@
+{"type":"agent-name","agentName":"verify-qa-222","sessionId":"bbbbbbbb-0000-4000-8000-000000000002"}
+{"parentUuid":null,"isSidechain":false,"type":"assistant","uuid":"u-h2a-10:23:00.000Z","timestamp":"2026-10-13T10:23:00.000Z","requestId":"req-h2a","effort":"medium","sessionId":"bbbbbbbb-0000-4000-8000-000000000002","message":{"id":"h2a","model":"claude-sonnet-5-5","role":"assistant","content":[{"type":"text","text":"<q>"}],"usage":{"input_tokens":3,"cache_creation_input_tokens":3000,"cache_read_input_tokens":0,"output_tokens":700}}}
+{broken

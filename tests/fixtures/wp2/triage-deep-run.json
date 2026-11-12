@@ -1,0 +1,7 @@
+{
+  "change_size": "medium",
+  "risk": "high",
+  "qa": {"scope": "run", "reason": "new endpoint reachable over HTTP", "focus": ["GET /health"], "needs_login": false},
+  "review": {"tier": "deep", "reason": "new source file with request handling", "focus": ["error paths"]},
+  "confidence": "medium"
+}

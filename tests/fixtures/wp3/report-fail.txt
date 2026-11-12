@@ -1,0 +1,19 @@
+RESULT: FAIL
+verify-loop · attempt 1 · failures 1/3 · review FAIL (1 major) · qa FAIL (1 blocker) · 4m10s
+Blocking:
+  R1 [major·correctness·high] src/publisher.ts:14 — Retry counter never resets after success
+     scenario: Publish fails twice, then succeeds; the next failure is treated as attempt 3 and gives up after 1 retry instead of 3.
+     fix: Reset this.attempts = 0 after a successful send.
+  Q1 [blocker·acceptance] C2 "Next advances to step 4" — expected: Step 4 is shown · actual: stays on step 3
+     repro: 1) open https://localhost:8100/scan 2) complete steps 1–2 3) click Next · evidence: /tmp/run/attempt-1/qa-artifacts/page.png
+Not blocking (downgraded): R4 major→minor (no concrete failing scenario)
+Minor: R2 src/publisher.ts:10 — debug console.log left
+Suggestions (3 of 5): S1 suggestion 1 · S2 suggestion 2 · S3 suggestion 3
+Unverified: C3 "Admin can export" — auth_expired → ! {{vloop}} auth capture --url https://localhost:8100
+Warnings: tree changed during verification (main agent edited src/x.ts)
+Browser QA: approved (user)
+next: fix every blocking finding (or dispute one: {{vloop}} dispute <id> --run 20261015-122001-demo-3fa9 --reason "<evidence>"), then:
+  {{vloop}} begin --rerun --run 20261015-122001-demo-3fa9 --fix-notes - <<'EOF'
+  R1: <what changed, where>
+  Q1: <what changed, where>
+  EOF
