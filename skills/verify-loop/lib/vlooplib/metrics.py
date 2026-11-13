@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import statistics
 import sys
 import time
@@ -1049,6 +1050,15 @@ def _spawns_retro(name: str) -> bool:
         return False
 
 
+def _herdr_cli_at_depth0() -> str | None:
+    from .transports import herdr
+
+    if os.environ.get("HERDR_ENV") != "1" or herdr.depth() != 0:
+        return None
+    cli = herdr.herdr_agent()
+    return cli if cli and herdr.integration_ok(cli) else None
+
+
 def retro_next(run_id: str, transport_name: str | None, platform: str | None) -> str:
     """The line(s) telling the main agent how to run the retro of a closed run.
 
@@ -1072,6 +1082,9 @@ def retro_next(run_id: str, transport_name: str | None, platform: str | None) ->
     elif platform == "codex":
         line = (f'next (Codex, in the background): spawn the custom agent "{vault.keeper_agent("codex")}" (model {model}) '
                 f'with the prompt: {prompt}')
+    elif (cli := _herdr_cli_at_depth0()):
+        line = (f'next (Herdr, run_in_background: true): {shlex.quote(str(cli))} run vault-keeper --agent {vault.keeper_agent(platform)} '
+                f'--model {model} --cwd {shlex.quote(str(root or os.getcwd()))} --prompt "{prompt}"')
     else:
         line = (f'next (Agent tool, run_in_background: true): Agent(subagent_type="{vault.keeper_agent(platform)}", '
                 f'model="{model}", description="retro", prompt="{prompt}")')

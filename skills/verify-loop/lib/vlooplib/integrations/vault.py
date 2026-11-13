@@ -246,12 +246,29 @@ def _dir_template() -> str:
     return DEFAULT_VAULT_DIR
 
 
-def vault_root_hint() -> Path | None:
-    tpl = _dir_template().rstrip("/")
-    if os.path.basename(tpl) == "{project}":
-        tpl = os.path.dirname(tpl)
+def vault_root_hint(cwd: str | Path | None = None) -> Path | None:
+    """Vault root `vault resolve` would use for the configured template; relative ones resolve against the repo root of `cwd`."""
+    tpl = os.path.expanduser(_dir_template())
+    head, _, last = tpl.rstrip("/").rpartition("/")
+    if last == "{project}" and "{project}" not in head:
+        root_t = head or ("/" if tpl.startswith("/") else ".")
+    elif "{project}" in tpl:
+        parts = tpl.split("/")
+        i = next(i for i, c in enumerate(parts) if "{project}" in c)
+        root_t = "/".join(parts[:i]) or ("/" if tpl.startswith("/") else ".")
     else:
-        tpl = tpl.replace("{project}", "")
-    if not tpl or not (tpl.startswith("/") or tpl.startswith("~")):
+        root_t = tpl
+    repo_root = None
+    if cwd:
+        from .. import gitsnap
+
+        repo = gitsnap.repo_for(cwd)
+        repo_root = Path(os.path.realpath(repo["root"])) if repo else None
+    if os.path.isabs(root_t):
+        return Path(os.path.realpath(os.path.normpath(root_t)))
+    if not repo_root:
         return None
-    return Path(os.path.realpath(os.path.expanduser(tpl)))
+    root = Path(os.path.realpath(os.path.normpath(os.path.join(repo_root, root_t))))
+    if repo_root and (root == repo_root or root in repo_root.parents):
+        return None
+    return root

@@ -104,7 +104,8 @@ Rules for extensions:
 ## Herdr (extension)
 
 The `herdr` transport (`transports/herdr.py`) is the only place that knows Herdr. It needs the `herdr-agent` CLI:
-`VERIFY_HERDR_AGENT` (a path), then `herdr-agent` on `PATH`, then the `herdr-agent` skill in the Claude home.
+`VERIFY_HERDR_AGENT` (a path), then `HERDR_AGENT`, then `herdr-agent` on `PATH`, then the `herdr-agent` skill in the Claude
+home. Its `herdr-agent version --json` must report `integration` ≥ 1; otherwise vloop warns and uses the `agent` transport.
 
 - **Selection.** `auto` picks it inside Herdr (`HERDR_ENV=1`) at depth 0. A delegated sub-agent (Herdr depth ≥ 1)
   falls back to `agent`, and the loop is not run there (it lists changed files for the orchestrator instead). Force it
@@ -113,7 +114,9 @@ The `herdr` transport (`transports/herdr.py`) is the only place that knows Herdr
   as its own background Bash call; the tab closes when the agent finishes.
 - **Dialogs.** A folder-trust or permission dialog in a tab makes `spawn` exit 3 with the screen snapshot. Show it to
   the user, let them decide, run what they decided (`herdr-agent keys …`), then `vloop spawn-wait <role> --run <id>`.
-  Exit 4 (timeout) → `vloop spawn-wait` later.
+  Exit 4 (timeout) → `vloop spawn-wait` later. When the prompt was never delivered (`last_prompt_at_ns` is 0 in
+  `herdr-agent status`), `spawn-wait` re-sends it from the agent's `prompt.md`. Exit 7 (`api_error`, the turn ended on a
+  Claude Code API error) prints the hint and the resume command; `spawn-wait` then sends `continue`.
 - **Retro.** The retro agent also runs in a tab (`vloop spawn retro --run <id>`) when agent-vault is installed.
-- **Hooks.** Events from a Herdr child are attributed to the parent session (`HERDR_PARENT_SESSION_ID`), and the Stop
+- **Hooks.** Events from a Herdr child are attributed to the root session (`HERDR_ROOT_SESSION_ID`, falling back to `HERDR_PARENT_SESSION_ID`), and the Stop
   gate is suppressed inside children.

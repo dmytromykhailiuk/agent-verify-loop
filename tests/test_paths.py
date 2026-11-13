@@ -252,6 +252,7 @@ class TransportRegistryTest(PathsCase):
         ctx = h.hook_context({"session_id": "child"})
         self.assertEqual((ctx.target_sid, ctx.is_child, ctx.suppress_gate), ("parent", True, True))
         self.assertIn("HERDR_PARENT_SESSION_ID", h.child_env_strip())
+        self.assertIn("HERDR_ROOT_SESSION_ID", h.child_env_strip())
 
     def test_extra_module_from_env_and_config(self):
         mod = self.tmp / "ext.py"

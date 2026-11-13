@@ -802,6 +802,8 @@ def _finish(ctx: dict, role: str, n: int, res, t, info: dict) -> int:
         if res.doc is not None or res.screen:
             if res.screen:
                 print(res.screen)
+            if (res.doc or {}).get("hint"):
+                print(f"hint: {res.doc['hint']}")
             print(f"blocked: answer the dialog in {t.where(info)} yourself only if the user tells you to — show this "
                   f"to the user; then: {_vl()} spawn-wait {role} --run {run_id}")
         else:
@@ -815,6 +817,10 @@ def _finish(ctx: dict, role: str, n: int, res, t, info: dict) -> int:
         print(f"timeout: still running in {t.where(info)}; later: {_vl()} spawn-wait {role} --run {run_id}")
         _record_agent(ctx, role, n, status="timeout", **keep)
         return 4
+    if res.status == "api_error":
+        _print_api_error(res, t, info, f"{_vl()} spawn-wait {role} --run {run_id}")
+        _record_agent(ctx, role, n, status="api_error", **keep)
+        return 7
     v, err = None, None
     if res.status == "done":
         if res.result:
@@ -836,6 +842,19 @@ def _finish(ctx: dict, role: str, n: int, res, t, info: dict) -> int:
     print(verdict.role_line(role, v, err, dur, me))
     print(_next_line(ctx, n))
     return 1 if status == "error" else 0
+
+
+def _print_api_error(res, t, info: dict, again: str) -> None:
+    doc = res.doc or {}
+    if doc.get("api_error"):
+        print(f"api error: {doc['api_error']}")
+    if doc.get("hint"):
+        print(f"hint: {doc['hint']}")
+    resume = (res.info or {}).get("resume")
+    if resume:
+        print(f"resume: {resume}")
+    print(f"api_error: the agent in {t.where(info)} ended its turn on a Claude Code API error, its work is "
+          f"unfinished — show this to the user; to resume it: {again}")
 
 
 def _role_transport(ctx: dict, role: str, n: int | None = None):
@@ -945,17 +964,19 @@ def _spawn_retro(ctx: dict, timeout: float | None, wait: bool = False) -> int:
         _event(ctx, "retro_spawn", None, transport=t.name, session_id=None, status="running", **t.event_fields({}))
         res = t.spawn_retro(ctx, rd, cwd, bool(repo.get("root")), cfg)
     info = {**info, **(res.info or {})}
-    status = res.status if res.status in ("done", "blocked", "timeout", "dead", "no_result") else "error"
+    status = res.status if res.status in ("done", "blocked", "timeout", "dead", "no_result", "api_error") else "error"
     now = util.now_iso()
 
     def upd(c):
         c["retro_agent"] = {**info, "status": status,
-                            "ended_at": now if status not in ("blocked", "timeout") else None}
+                            "ended_at": now if status not in ("blocked", "timeout", "api_error") else None}
     _update_ctx(run_id, upd)
     if status == "blocked":
         if res.screen:
             print(res.screen)
         if res.doc is not None or res.screen:
+            if (res.doc or {}).get("hint"):
+                print(f"hint: {res.doc['hint']}")
             print(f"blocked: answer the dialog in {t.where(info)} yourself only if the user tells you to — show this "
                   f"to the user; then: {_vl()} spawn-wait retro --run {run_id}")
         else:
@@ -967,6 +988,9 @@ def _spawn_retro(ctx: dict, timeout: float | None, wait: bool = False) -> int:
     if status == "timeout":
         print(f"timeout: still running in {t.where(info)}; later: {_vl()} spawn-wait retro --run {run_id}")
         return 4
+    if status == "api_error":
+        _print_api_error(res, t, info, f"{_vl()} spawn-wait retro --run {run_id}")
+        return 7
     _event(ctx, "retro_done", None, transport=t.name, **t.event_fields(info), session_id=info.get("session_id"),
            status=status)
     dur = util.short_dur(_duration(info, now) or 0)

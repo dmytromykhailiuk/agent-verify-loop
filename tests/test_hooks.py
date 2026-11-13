@@ -95,6 +95,15 @@ class TrackingTest(HookCase):
         self.assertEqual(self.rs("p2")["touched"], ["b.js"])
         self.assertEqual(self.rs("p2")["baseline"]["trigger"], "pre-edit")
 
+    def test_h2_depth2_touch_lands_in_root(self):
+        self.hook("prompt", self.p_prompt("root", self.root))
+        env = {"HERDR_AGENT_DEPTH": "2", "HERDR_PARENT_SESSION_ID": "mid", "HERDR_ROOT_SESSION_ID": "root"}
+        self.edit("grandchild", self.root, "a.js", env=env)
+        self.assertEqual(self.rs("root")["touched"], ["a.js"])
+        self.assertIsNone(self.session("mid"))
+        self.assertIsNone(self.session("grandchild"))
+        self.assertEqual(self.session("root")["task"]["n"], 1)
+
     def test_i_verify_agents_untracked(self):
         for agent in ("verify-qa", "verify-reviewer", "vault-keeper", "agent-verify-loop:verify-reviewer",
                       "agent-verify-loop:verify-qa", "agent-vault:vault-keeper", "verify-triage"):

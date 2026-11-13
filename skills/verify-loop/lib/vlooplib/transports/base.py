@@ -10,7 +10,7 @@ import abc
 from dataclasses import dataclass, field
 from pathlib import Path
 
-STATUSES = ("done", "manual", "blocked", "timeout", "dead", "no_result", "error")
+STATUSES = ("done", "manual", "blocked", "timeout", "dead", "no_result", "api_error", "error")
 
 
 @dataclass

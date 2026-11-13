@@ -13,18 +13,25 @@ import sys
 from pathlib import Path
 
 ROLE = {"verify-review": "reviewer", "verify-qa": "qa", "vault-retro": "retro"}
-d = Path(os.environ["FAKE_HERDR_DIR"])
 argv = sys.argv[1:]
+cmd = argv[0]
+if cmd == "version":
+    print(json.dumps({"version": "9.9.9", "integration": int(os.environ.get("FAKE_HERDR_INTEGRATION", "1"))}))
+    sys.exit(0)
+d = Path(os.environ["FAKE_HERDR_DIR"])
 with open(d / "calls.jsonl", "a") as f:
     f.write(json.dumps({"argv": argv}) + "\n")
-cmd = argv[0]
+if cmd == "status":
+    sf = d / "status.json"
+    print(sf.read_text() if sf.exists() else json.dumps({"id": argv[1], "last_prompt_at_ns": 1}))
+    sys.exit(0)
 if cmd == "run":
     label = argv[1]
     role = ROLE[label]
     hid = f"{label}-1a2b3c"
     prompt = argv[argv.index("--prompt") + 1]
     cfgfile = d / f"{role}.json"
-else:  # wait <id>
+else:  # wait <id> | send <id> ...
     hid = argv[1]
     role = ROLE[hid.rsplit("-", 1)[0]]
     prompt = ""
@@ -45,7 +52,7 @@ result = cfg.get("result")
 if result == "@verdict":
     result = "Summary line.\n```json\n" + json.dumps(cfg.get("message_verdict") or verdict) + "\n```\n"
 code = int(cfg.get("exit", 0))
-status = {0: "done", 3: "blocked", 4: "timeout", 5: "dead", 6: "no_result"}.get(code, "error")
+status = {0: "done", 3: "blocked", 4: "timeout", 5: "dead", 6: "no_result", 7: "api_error"}.get(code, "error")
 if cfg.get("stderr"):
     sys.stderr.write(cfg["stderr"] + "\n")
 if cfg.get("doc", True):
@@ -53,5 +60,11 @@ if cfg.get("doc", True):
            "result": result if code == 0 else None, "session_id": f"sess-{role}"}
     if code == 3:
         doc["screen"] = cfg.get("screen", "Do you trust this folder? 1. Yes 2. No")
+    if cfg.get("hint"):
+        doc["hint"] = cfg["hint"]
+    if cfg.get("api_error"):
+        doc["api_error"] = cfg["api_error"]
+    if cfg.get("dir"):
+        doc["dir"] = cfg["dir"]
     print(json.dumps(doc, indent=2))
 sys.exit(code)

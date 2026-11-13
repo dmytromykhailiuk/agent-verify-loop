@@ -6,14 +6,16 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from . import common
 from .base import HookContext, SpawnResult, Transport
 
-EXIT_STATUS = {0: "done", 3: "blocked", 4: "timeout", 5: "dead", 6: "no_result"}
+EXIT_STATUS = {0: "done", 3: "blocked", 4: "timeout", 5: "dead", 6: "no_result", 7: "api_error"}
+MIN_INTEGRATION = 1
 ENV_STRIP = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "HERDR_AGENT_DIR",
-             "HERDR_AGENT_ID", "HERDR_AGENT_DEPTH", "HERDR_PARENT_SESSION_ID"]
+             "HERDR_AGENT_ID", "HERDR_AGENT_DEPTH", "HERDR_PARENT_SESSION_ID", "HERDR_ROOT_SESSION_ID"]
 HERDR_ROLES = {"reviewer": "verify-review", "qa": "verify-qa", "retro": "vault-retro"}
 RETRO_TOOLS = ["Bash(git log *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git ls-files *)", "Bash(git grep *)",
                "Bash(git rev-parse *)", "Bash(git status *)", "Bash(wc *)", "Bash(sort *)", "Bash(uniq *)",
@@ -27,19 +29,93 @@ def depth() -> int:
         return 0
 
 
+def _executable(path: str | None) -> str | None:
+    if not path:
+        return None
+    p = os.path.expanduser(path)
+    return p if os.path.isfile(p) and os.access(p, os.X_OK) else None
+
+
 def herdr_agent() -> str | None:
-    """`VERIFY_HERDR_AGENT`, then `herdr-agent` on PATH, then the herdr-agent skill in the Claude home."""
+    """`VERIFY_HERDR_AGENT`, then `HERDR_AGENT`, then `herdr-agent` on PATH, then the herdr-agent skill in the Claude
+    home."""
     from .. import paths
 
-    env = os.environ.get("VERIFY_HERDR_AGENT")
-    if env:
-        p = os.path.expanduser(env)
-        return p if os.path.isfile(p) and os.access(p, os.X_OK) else None
-    found = shutil.which("herdr-agent")
-    if found:
-        return found
-    p = paths.claude_home() / "skills" / "herdr-agent" / "bin" / "herdr-agent"
-    return str(p) if p.is_file() and os.access(p, os.X_OK) else None
+    override = os.environ.get("VERIFY_HERDR_AGENT")
+    if override:
+        return _executable(override)
+    return (_executable(os.environ.get("HERDR_AGENT")) or shutil.which("herdr-agent")
+            or _executable(str(paths.claude_home() / "skills" / "herdr-agent" / "bin" / "herdr-agent")))
+
+
+def _integration_cache() -> Path:
+    from .. import util
+
+    return util.state_dir() / "herdr-integration.json"
+
+
+def _cache_key(binary: str) -> tuple[str, int] | None:
+    try:
+        real = os.path.realpath(binary)
+        version_file = Path(real).parent.parent / "lib" / "herdragent" / "__init__.py"
+        try:
+            stamp = os.stat(version_file).st_mtime_ns
+        except OSError:
+            stamp = os.stat(real).st_mtime_ns
+    except OSError:
+        return None
+    return real, stamp
+
+
+def integration_number(binary: str) -> int | None:
+    """`integration` of `herdr-agent version --json`; only successful answers are cached on disk, per resolved CLI and
+    the mtime of the herdr-agents lib version file."""
+    from .. import util
+
+    key = _cache_key(binary)
+    if key is None:
+        return None
+    real, stamp = key
+    cache = util.read_json(_integration_cache(), {})
+    hit = cache.get(real) if isinstance(cache, dict) else None
+    if isinstance(hit, dict) and hit.get("mtime") == stamp and isinstance(hit.get("integration"), int):
+        return hit["integration"]
+    import subprocess
+
+    try:
+        p = subprocess.run([binary, "version", "--json"], capture_output=True, text=True, timeout=15,
+                           stdin=subprocess.DEVNULL)
+        doc = _parse_doc(p.stdout) if p.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = (doc or {}).get("integration")
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    cache = cache if isinstance(cache, dict) else {}
+    cache[real] = {"mtime": stamp, "integration": value}
+    try:
+        util.atomic_write_json(_integration_cache(), cache)
+    except OSError:
+        pass
+    return value
+
+
+_warned: set[str] = set()
+
+
+def integration_ok(binary: str | None = None) -> bool:
+    binary = binary or herdr_agent()
+    if not binary:
+        return False
+    number = integration_number(binary)
+    if number is not None and number >= MIN_INTEGRATION:
+        return True
+    if binary not in _warned:
+        _warned.add(binary)
+        found = f"integration {number}" if number is not None else "no integration number"
+        sys.stderr.write(f"vloop: {binary} reports {found}; the Herdr transport needs integration >= "
+                         f"{MIN_INTEGRATION}. Update herdr-agents; using the Agent-tool transport.\n")
+    return False
 
 
 def _bin() -> str:
@@ -72,7 +148,7 @@ def role_cmd(role: str, *, run_dir: Path, att_dir: Path, repo_root: str, model: 
 def vault_root(cwd: str, has_repo: bool) -> str:
     from ..integrations import vault
 
-    root = vault.vault_root(cwd, None if has_repo else "_harness") or vault.vault_root_hint()
+    root = vault.vault_root(cwd, None if has_repo else "_harness") or vault.vault_root_hint(cwd)
     return str(root) if root else os.path.expanduser(vault.DEFAULT_VAULT_DIR)
 
 
@@ -92,6 +168,33 @@ def wait_cmd(herdr_id: str, timeout: float | None = None) -> list[str]:
     if timeout:
         cmd += ["--timeout", str(int(timeout))]
     return cmd
+
+
+def send_cmd(herdr_id: str, prompt: str, timeout: float | None = None, *, prompt_file: bool = False) -> list[str]:
+    cmd = [_bin(), "send", herdr_id, "--prompt-file" if prompt_file else "--prompt", prompt, "--wait", "--close",
+           "--json"]
+    if timeout:
+        cmd += ["--timeout", str(int(timeout))]
+    return cmd
+
+
+def resume_cmd(herdr_id: str) -> str:
+    return f"{_bin()} send {herdr_id} --prompt continue --wait --close"
+
+
+def prompt_delivered(herdr_id: str) -> bool:
+    """False only when `herdr-agent status` proves the agent never received its prompt."""
+    import subprocess
+
+    try:
+        p = subprocess.run([_bin(), "status", herdr_id], capture_output=True, text=True, timeout=30,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    meta = _parse_doc(p.stdout) if p.returncode == 0 else None
+    if not meta or "last_prompt_at_ns" not in meta:
+        return True
+    return bool(meta["last_prompt_at_ns"])
 
 
 def _parse_doc(out: str) -> dict | None:
@@ -127,6 +230,9 @@ def _result(rc: int, doc: dict | None, stderr: str, info: dict) -> SpawnResult:
     if doc:
         info["herdr_id"] = doc.get("id") or info.get("herdr_id")
         info["session_id"] = doc.get("session_id") or info.get("session_id")
+        info["herdr_dir"] = doc.get("dir") or info.get("herdr_dir")
+    if rc == 7 and info.get("herdr_id"):
+        info["resume"] = resume_cmd(info["herdr_id"])
     return SpawnResult(status=EXIT_STATUS.get(rc, "error"), rc=rc, doc=doc, stderr=stderr, info=info,
                        result=(doc or {}).get("result") if rc == 0 else None, screen=(doc or {}).get("screen"))
 
@@ -138,7 +244,10 @@ class HerdrTransport(Transport):
     supports_retro = True
 
     def available(self, cfg: dict) -> bool:
-        return os.environ.get("HERDR_ENV") == "1" and depth() == 0 and herdr_agent() is not None
+        if os.environ.get("HERDR_ENV") != "1" or depth() != 0:
+            return False
+        binary = herdr_agent()
+        return binary is not None and integration_ok(binary)
 
     def spawn_plan(self, role: str, ctx: dict, attempt: int, prompt_path: str | Path, model: str,
                    effort: str) -> list[str]:
@@ -171,14 +280,24 @@ class HerdrTransport(Transport):
         hid = (info or {}).get("herdr_id")
         if not hid:
             return SpawnResult(status="error", rc=1, stderr="no herdr agent id recorded", info=dict(info or {}))
-        rc, doc, err = run_herdr(wait_cmd(hid, timeout), float(timeout or 0))
+        info = dict(info or {})
+        d = info.get("herdr_dir")
+        prompt = os.path.join(d, "prompt.md") if d else None
+        if prompt and os.path.isfile(prompt) and not prompt_delivered(hid):
+            cmd = send_cmd(hid, prompt, timeout, prompt_file=True)
+        elif info.get("status") == "api_error":
+            cmd = send_cmd(hid, "continue", timeout)
+        else:
+            cmd = wait_cmd(hid, timeout)
+        rc, doc, err = run_herdr(cmd, float(timeout or 0))
         return _result(rc, doc, err, info)
 
     def hook_context(self, payload: dict) -> HookContext:
-        parent = os.environ.get("HERDR_PARENT_SESSION_ID")
+        target = os.environ.get("HERDR_ROOT_SESSION_ID") or os.environ.get("HERDR_PARENT_SESSION_ID")
         d = depth()
-        if d >= 1 and parent:
-            return HookContext(target_sid=parent, is_child=True, suppress_gate=True, depth=d, parent_session_id=parent)
+        if d >= 1 and target:
+            return HookContext(target_sid=target, is_child=True, suppress_gate=True, depth=d,
+                               parent_session_id=os.environ.get("HERDR_PARENT_SESSION_ID") or target)
         return HookContext(target_sid=str((payload or {}).get("session_id") or ""), suppress_gate=d >= 1,
                            depth=d if d >= 1 else None)
 

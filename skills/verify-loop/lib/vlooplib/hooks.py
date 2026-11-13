@@ -80,7 +80,8 @@ def agent_kind(agent_type: str | None) -> tuple[bool, str | None]:
 def _excluded_roots(payload: dict) -> list[str]:
     from .integrations import vault
 
-    roots = [vault.vault_root_hint(), paths.claude_home(), paths.codex_home(), util.state_dir(), paths.data_dir()]
+    roots = [vault.vault_root_hint(payload.get("cwd")), paths.claude_home(), paths.codex_home(), util.state_dir(),
+             paths.data_dir()]
     if os.environ.get("VERIFY_LOOP_ALLOW_TMP") != "1":
         roots += ["/tmp", "/private/tmp", "/var/folders"]
         if os.environ.get("TMPDIR"):

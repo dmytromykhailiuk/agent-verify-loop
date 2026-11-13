@@ -269,6 +269,36 @@ class TestPolicyMinutes(HermeticCase):
 
 
 class TestRetroPlan(Base):
+    def test_retro_hint_uses_herdr_agent_inside_herdr_at_depth0(self):
+        fake = self.tmp / "bin" / "herdr-agent"
+        fake.parent.mkdir(parents=True, exist_ok=True)
+        fake.write_text("#!/bin/sh\necho '{\"integration\": 1}'\n")
+        fake.chmod(0o755)
+        os.environ.update({"HERDR_ENV": "1", "VERIFY_HERDR_AGENT": str(fake)})
+        line = metrics.retro_next(R, "agent", "claude").splitlines()[0]
+        self.assertTrue(line.startswith(f"next (Herdr, run_in_background: true): {fake} run vault-keeper --agent "
+                                        f"vault-keeper --model sonnet --cwd "), line)
+        self.assertNotIn("Agent(", line)
+        spaced = self.tmp / "my bin" / "herdr-agent"
+        spaced.parent.mkdir(parents=True)
+        spaced.write_text(fake.read_text())
+        spaced.chmod(0o755)
+        os.environ["VERIFY_HERDR_AGENT"] = str(spaced)
+        line = metrics.retro_next(R, "agent", "claude").splitlines()[0]
+        self.assertIn(f"'{spaced}' run vault-keeper", line)
+        os.environ["VERIFY_HERDR_AGENT"] = str(fake)
+        os.environ["HERDR_AGENT_DEPTH"] = "1"
+        self.assertIn("Agent(subagent_type=", metrics.retro_next(R, "agent", "claude"))
+        os.environ["HERDR_AGENT_DEPTH"] = "0"
+        os.environ["VERIFY_HERDR_AGENT"] = str(self.tmp / "missing")
+        self.assertIn("Agent(subagent_type=", metrics.retro_next(R, "agent", "claude"))
+        old = self.tmp / "old" / "herdr-agent"
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_text("#!/bin/sh\necho '{\"integration\": 0}'\n")
+        old.chmod(0o755)
+        os.environ["VERIFY_HERDR_AGENT"] = str(old)
+        self.assertIn("Agent(subagent_type=", metrics.retro_next(R, "agent", "claude"))
+
     def test_full_plan_ledger_once_and_artifacts(self):
         rc, out, _ = self.cli("retro-plan", "--run", R)
         self.assertEqual(rc, 0)
@@ -295,6 +325,7 @@ class TestRetroPlan(Base):
         self.assertEqual(rp[-1]["data"], {"policy": "full", "reason": "1 failed attempt(s)"})
         # second run: ledger untouched
         os.environ["HERDR_ENV"] = "1"
+        os.environ["VERIFY_HERDR_AGENT"] = str(Path(__file__).resolve().parent / "fixtures" / "wp2" / "fake-herdr-agent")
         rc, out, _ = self.cli("retro-plan", "--run", R)
         self.assertEqual(rc, 0)
         self.assertIn(f"next (Herdr, run_in_background: true): {VL} spawn retro --run {R}", out)

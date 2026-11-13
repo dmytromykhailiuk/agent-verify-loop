@@ -30,7 +30,10 @@ except ImportError:
     tomllib = None
 
 
-def exe(path: Path, text: str = "#!/bin/sh\nexit 0\n") -> Path:
+HERDR_STUB = "#!/bin/sh\necho '{\"integration\": 1}'\n"
+
+
+def exe(path: Path, text: str = HERDR_STUB) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -67,7 +70,7 @@ class RegistryTest(HermeticCase):
         self.assertEqual(transports.select({}).name, "agent", "no herdr-agent anywhere")
         os.environ["VERIFY_HERDR_AGENT"] = str(self.tmp / "missing")
         self.assertEqual(transports.select({}).name, "agent", "VERIFY_HERDR_AGENT must exist")
-        os.environ["VERIFY_HERDR_AGENT"] = str(FAKE_HERDR)
+        os.environ["VERIFY_HERDR_AGENT"] = str(exe(self.tmp / "stub" / "herdr-agent"))
         self.assertEqual(transports.select({"transport": "auto"}).name, "herdr")
         os.environ["HERDR_AGENT_DEPTH"] = "1"
         self.assertEqual(transports.select({}).name, "agent", "nested Herdr agents use the in-session transport")
@@ -81,6 +84,72 @@ class RegistryTest(HermeticCase):
         self.assertEqual(transports.select({}).name, "herdr", "found in the herdr-agent skill")
         os.environ["HERDR_ENV"] = "0"
         self.assertEqual(transports.select({}).name, "agent")
+
+    def test_herdr_agent_lookup_order(self):
+        os.environ["PATH"] = str(self.tmp / "bin")
+        on_path = exe(self.tmp / "bin" / "herdr-agent")
+        skill = exe(self.home / ".claude" / "skills" / "herdr-agent" / "bin" / "herdr-agent")
+        self.assertEqual(herdr.herdr_agent(), str(on_path))
+        env_bin = exe(self.tmp / "env" / "herdr-agent")
+        os.environ["HERDR_AGENT"] = str(env_bin)
+        self.assertEqual(herdr.herdr_agent(), str(env_bin), "HERDR_AGENT beats PATH")
+        override = exe(self.tmp / "override" / "herdr-agent")
+        os.environ["VERIFY_HERDR_AGENT"] = str(override)
+        self.assertEqual(herdr.herdr_agent(), str(override), "VERIFY_HERDR_AGENT beats HERDR_AGENT")
+        del os.environ["VERIFY_HERDR_AGENT"]
+        os.environ["HERDR_AGENT"] = str(self.tmp / "gone")
+        self.assertEqual(herdr.herdr_agent(), str(on_path), "an invalid HERDR_AGENT falls through to PATH")
+        os.environ["PATH"] = str(self.tmp / "nobin")
+        self.assertEqual(herdr.herdr_agent(), str(skill))
+        skill.unlink()
+        self.assertIsNone(herdr.herdr_agent())
+
+    def test_integration_number_gates_herdr(self):
+        os.environ["HERDR_ENV"] = "1"
+        old = exe(self.tmp / "old" / "herdr-agent", "#!/bin/sh\necho '{\"integration\": 0}'\n")
+        os.environ["VERIFY_HERDR_AGENT"] = str(old)
+        self.assertEqual(transports.select({}).name, "agent")
+        self.assertFalse(herdr.integration_ok())
+        missing = exe(self.tmp / "none" / "herdr-agent", "#!/bin/sh\necho version\n")
+        os.environ["VERIFY_HERDR_AGENT"] = str(missing)
+        self.assertEqual(transports.select({}).name, "agent")
+        failing = exe(self.tmp / "fail" / "herdr-agent", "#!/bin/sh\nexit 2\n")
+        os.environ["VERIFY_HERDR_AGENT"] = str(failing)
+        self.assertEqual(transports.select({}).name, "agent")
+        new = exe(self.tmp / "new" / "herdr-agent", "#!/bin/sh\necho '{\"integration\": 3}'\n")
+        os.environ["VERIFY_HERDR_AGENT"] = str(new)
+        self.assertEqual(transports.select({}).name, "herdr")
+
+    def test_integration_warning_and_cache(self):
+        import contextlib
+        import io
+
+        calls = self.tmp / "calls"
+        old = exe(self.tmp / "old" / "herdr-agent", f"#!/bin/sh\necho x >> {calls}\necho '{{\"integration\": 0}}'\n")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            self.assertFalse(herdr.integration_ok(str(old)))
+            self.assertFalse(herdr.integration_ok(str(old)))
+        self.assertEqual(buf.getvalue().count("integration 0"), 1)
+        self.assertIn("Agent-tool transport", buf.getvalue())
+        self.assertEqual(len(calls.read_text().splitlines()), 1, "the version call is cached on disk")
+
+    def test_failures_are_not_cached_and_lib_change_invalidates(self):
+        root = self.tmp / "ha"
+        lib = root / "lib" / "herdragent"
+        lib.mkdir(parents=True)
+        init = lib / "__init__.py"
+        init.write_text("")
+        flag = self.tmp / "flag"
+        cli = exe(root / "bin" / "herdr-agent",
+                  f"#!/bin/sh\nif [ -e {flag} ]; then echo '{{\"integration\": 2}}'; else exit 1; fi\n")
+        self.assertIsNone(herdr.integration_number(str(cli)))
+        flag.write_text("")
+        self.assertEqual(herdr.integration_number(str(cli)), 2)
+        flag.unlink()
+        self.assertEqual(herdr.integration_number(str(cli)), 2, "success is cached")
+        os.utime(init, (1, 1))
+        self.assertIsNone(herdr.integration_number(str(cli)), "lib version file mtime invalidates the cache")
 
     def test_explicit_and_unknown(self):
         self.assertEqual(transports.select({"transport": "headless"}).name, "headless")
@@ -141,10 +210,17 @@ class RegistryTest(HermeticCase):
         os.environ.update({"HERDR_AGENT_DEPTH": "1", "HERDR_PARENT_SESSION_ID": "parent"})
         hc = transports.hook_context({"session_id": "child"})
         self.assertEqual((hc.target_sid, hc.is_child, hc.suppress_gate), ("parent", True, True))
+        os.environ.update({"HERDR_AGENT_DEPTH": "2", "HERDR_PARENT_SESSION_ID": "mid", "HERDR_ROOT_SESSION_ID": "root"})
+        hc = transports.hook_context({"session_id": "grandchild"})
+        self.assertEqual((hc.target_sid, hc.is_child, hc.suppress_gate, hc.parent_session_id, hc.depth),
+                         ("root", True, True, "mid", 2))
+        del os.environ["HERDR_PARENT_SESSION_ID"]
+        hc = transports.hook_context({"session_id": "grandchild"})
+        self.assertEqual((hc.target_sid, hc.parent_session_id), ("root", "root"))
 
     def test_strip_env_union(self):
         keys = transports.strip_env()
-        for k in ("HERDR_ENV", "HERDR_PARENT_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "VLOOP_GUARD_ROLE"):
+        for k in ("HERDR_ENV", "HERDR_PARENT_SESSION_ID", "HERDR_ROOT_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "VLOOP_GUARD_ROLE"):
             self.assertIn(k, keys)
         os.environ.update({"HERDR_TAB_ID": "t", "CLAUDE_CODE_SESSION_ID": "s"})
         env = transports.child_env({"X": "1"})
@@ -468,6 +544,60 @@ class ExitCodeTest(h.Case):
         rc, _, err = self.vl("spawn-wait", "qa", "--run", self.rid)
         self.assertEqual(rc, 2)
         self.assertIn("no herdr agent recorded for qa", err)
+
+    def test_blocked_prints_hint(self):
+        self.herdr_role("reviewer", exit=3, verdict=None, screen="Trust?", hint="answer with `herdr-agent keys x enter`")
+        rc, out, _ = self.vl("spawn", "reviewer", "--run", self.rid)
+        self.assertEqual(rc, 3)
+        self.assertEqual(out.splitlines()[:2], ["Trust?", "hint: answer with `herdr-agent keys x enter`"])
+
+    def test_spawn_wait_resends_an_undelivered_prompt(self):
+        agent_dir = self.tmp / "agentdir"
+        agent_dir.mkdir()
+        (agent_dir / "prompt.md").write_text("Your task file is x. Read it completely and follow it.")
+        self.herdr_role("reviewer", exit=3, verdict=None, screen="Trust?", dir=str(agent_dir))
+        self.vl("spawn", "reviewer", "--run", self.rid)
+        self.assertEqual(self.agent("reviewer")["herdr_dir"], str(agent_dir))
+        (self.tmp / "herdr" / "status.json").write_text(json.dumps({"id": "verify-review-1a2b3c",
+                                                                    "last_prompt_at_ns": 0}))
+        self.herdr_role("reviewer", wait=True, exit=0, verdict=h.reviewer_pass(), result="done")
+        out = self.ok("spawn-wait", "reviewer", "--run", self.rid, "--timeout", "30")
+        self.assertTrue(out.startswith("reviewer: PASS"))
+        calls = self.herdr_calls()
+        self.assertEqual([c[0] for c in calls if c[0] in ("status", "send", "wait")], ["status", "send"])
+        send = [c for c in calls if c[0] == "send"][0]
+        self.assertEqual(send, ["send", "verify-review-1a2b3c", "--prompt-file", str(agent_dir / "prompt.md"),
+                                "--wait", "--close", "--json", "--timeout", "30"])
+
+    def test_spawn_wait_waits_when_the_prompt_was_delivered(self):
+        agent_dir = self.tmp / "agentdir"
+        agent_dir.mkdir()
+        (agent_dir / "prompt.md").write_text("p")
+        self.herdr_role("reviewer", exit=3, verdict=None, dir=str(agent_dir))
+        self.vl("spawn", "reviewer", "--run", self.rid)
+        self.herdr_role("reviewer", wait=True, exit=0, verdict=h.reviewer_pass(), result="done")
+        self.ok("spawn-wait", "reviewer", "--run", self.rid, "--timeout", "30")
+        self.assertEqual([c[0] for c in self.herdr_calls() if c[0] in ("send", "wait")], ["wait"])
+
+    def test_api_error_surfaces_hint_and_resume(self):
+        hint = "agent verify-review-1a2b3c ended on an API error. Resume with `herdr-agent send ...`"
+        self.herdr_role("reviewer", exit=7, verdict=None, api_error="API Error: connection dropped", hint=hint)
+        rc, out, _ = self.vl("spawn", "reviewer", "--run", self.rid)
+        self.assertEqual(rc, 7)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "api error: API Error: connection dropped")
+        self.assertEqual(lines[1], f"hint: {hint}")
+        self.assertEqual(lines[2], f"resume: {os.environ['VERIFY_HERDR_AGENT']} send verify-review-1a2b3c --prompt "
+                                   f"continue --wait --close")
+        self.assertIn(f"{VL} spawn-wait reviewer --run {self.rid}", lines[3])
+        self.assertEqual(self.agent("reviewer")["status"], "api_error")
+        self.assertFalse((self.att / "reviewer.error.json").exists())
+        self.herdr_role("reviewer", wait=True, exit=0, verdict=h.reviewer_pass(), result="done")
+        out = self.ok("spawn-wait", "reviewer", "--run", self.rid, "--timeout", "30")
+        self.assertTrue(out.startswith("reviewer: PASS"))
+        send = [c for c in self.herdr_calls() if c[0] == "send"][0]
+        self.assertEqual(send[:5], ["send", "verify-review-1a2b3c", "--prompt", "continue", "--wait"])
+        self.assertEqual(self.agent("reviewer")["status"], "done")
 
     def test_timeout(self):
         self.herdr_role("reviewer", exit=4, verdict=None)

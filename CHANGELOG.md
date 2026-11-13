@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Herdr integration: CLI lookup `VERIFY_HERDR_AGENT` → `HERDR_AGENT` → `PATH` → skill; `integration` number check with
+  fallback to the Agent-tool transport; exit 7 (`api_error`) with hint and resume; `spawn-wait` re-sends a prompt that
+  was never delivered; child edits are attributed to `HERDR_ROOT_SESSION_ID` (fallback `HERDR_PARENT_SESSION_ID`);
+  relative vault dirs are excluded from edit tracking; the retro hint uses `herdr-agent run` inside Herdr at depth 0.
+
 ## 0.1.0
 
 First standalone release of the verify loop, extracted from a hand-installed Claude Code setup.

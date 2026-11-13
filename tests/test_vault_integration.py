@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 import unittest
@@ -197,9 +198,43 @@ class TestRootHint(VaultCase):
         settings.write_text(json.dumps({"env": {"CLAUDE_VAULT_DIR": str(self.tmp / "fromsettings")}}))
         self.assertEqual(vault.vault_root_hint(), self.tmp / "fromsettings")
 
-    def test_relative_template_has_no_hint(self):
-        os.environ["AGENT_VAULT_DIR"] = "vault"
+    def test_relative_template_resolves_against_the_repo_root(self):
+        os.environ["AGENT_VAULT_DIR"] = "docs/vault"
         self.assertIsNone(vault.vault_root_hint())
+        self.assertIsNone(vault.vault_root_hint(self.tmp))
+        repo = self.tmp / "repo"
+        (repo / "src").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        self.assertEqual(vault.vault_root_hint(repo / "src"), Path(os.path.realpath(repo)) / "docs" / "vault")
+        os.environ["AGENT_VAULT_DIR"] = "shared/{project}"
+        self.assertEqual(vault.vault_root_hint(repo), Path(os.path.realpath(repo)) / "shared")
+
+    def test_relative_templates_match_vault_resolve(self):
+        repo = self.tmp / "repo"
+        (repo / "src").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        real = Path(os.path.realpath(repo))
+        cases = {
+            "./{project}": None,
+            "{project}": None,
+            "docs/{project}/notes": real / "docs",
+            "notes/{project}": real / "notes",
+            "vault": real / "vault",
+            "..": None,
+            "../{project}": None,
+        }
+        for tpl, want in cases.items():
+            os.environ["AGENT_VAULT_DIR"] = tpl
+            self.assertEqual(vault.vault_root_hint(repo / "src"), want, tpl)
+
+    def test_absolute_templates_unchanged(self):
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        os.environ["AGENT_VAULT_DIR"] = str(self.tmp / "abs" / "{project}")
+        self.assertEqual(vault.vault_root_hint(repo), self.tmp / "abs")
+        os.environ["AGENT_VAULT_DIR"] = str(self.tmp / "{project}")
+        self.assertEqual(vault.vault_root_hint(repo), self.tmp)
 
     def test_hint_never_runs_the_cli(self):
         fv = fakevault.install(self.tmp / "v")
