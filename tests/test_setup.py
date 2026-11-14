@@ -602,6 +602,26 @@ class DoctorTest(SetupCase):
         self.assertIn("user 0/3", out)
         self.assertNotIn("warning", out)
 
+    def test_agent_cost_detection(self):
+        import fakeagentcost
+        from vlooplib.integrations import agentcost
+
+        agentcost.reset_cache()
+        os.environ["PATH"] = "/usr/bin:/bin"
+        self.assertIn("agent-cost: not used — agent-cost not found (optional) · cost_source auto", self.doctor())
+        fc = fakeagentcost.install(self.tmp / "agent-cost")
+        os.environ["AGENT_COST_CLI"] = str(fc.cli)
+        out = self.doctor()
+        self.assertIn(f"agent-cost: {fc.cli} (v0.3.0, contract 1) · cost_source auto", out)
+        fc.configure(contract=0)
+        agentcost.reset_cache()
+        self.config.parent.mkdir(parents=True, exist_ok=True)
+        self.config.write_text(json.dumps({"cost_source": "agent-cost"}))
+        report = json.loads(self.doctor("--json"))
+        self.assertIn("speaks contract 0, vloop needs 1", report["agent_cost"]["status"])
+        self.assertEqual(report["cost_source"], "agent-cost")
+        self.assertTrue(any("cost_source is agent-cost" in n for n in report["notes"]))
+
     def test_after_setup_counts(self):
         self.ok("setup", "--agent", "all")
         out = self.doctor()

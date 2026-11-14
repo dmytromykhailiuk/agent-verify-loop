@@ -667,6 +667,8 @@ class ExitCodeTest(h.Case):
     def test_retro_spawn(self):
         (self.run_dir(self.rid) / "retro").mkdir()
         (self.run_dir(self.rid) / "retro" / "task.md").write_text("retro task")
+        ledger = self.tmp / "state" / "ledger.jsonl"
+        ledger.write_text(json.dumps({"ts": "2026-01-01T00:00:00Z", "run_id": self.rid, "retro": "full"}) + "\n")
         self.herdr_role("retro", exit=0, result="Retro recorded: 1 lesson.\n- lesson x")
         out = self.ok("spawn", "retro", "--run", self.rid)
         lines = out.splitlines()
@@ -682,6 +684,9 @@ class ExitCodeTest(h.Case):
         done = [e for e in self.events() if e["event"] == "retro_done"][-1]["data"]
         self.assertEqual((done["transport"], done["herdr_id"], done["session_id"], done["status"]),
                          ("herdr", "vault-retro-1a2b3c", "sess-retro", "done"))
+        row = json.loads(ledger.read_text())
+        self.assertEqual((row["ts"], row["retro"], row["run_id"]), ("2026-01-01T00:00:00Z", "full", self.rid))
+        self.assertIn("retro", row["cost_usd"])
 
 
 class HybridLoopTest(h.Case):

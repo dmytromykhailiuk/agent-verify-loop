@@ -30,7 +30,10 @@ ops: {{vault_ops_retro}}
 - Ledger baselines for this project: `{{vloop}} ledger --project {{project_slug}} --summary`
 
 Cost may be `null` ("n/a") when the model is not in the pricing table: reason from tokens and minutes then, and never
-estimate a dollar figure yourself.
+estimate a dollar figure yourself. Times come as wall / active / waiting / idle (wall = active + waiting + idle; waiting
+is time spent waiting on sub-agents, idle is waiting for the user and long pauses; judge effort by active time).
+`cost_source` on the main session and on each agent says where its numbers come from: `agent-cost`, `own` (vloop's
+transcript accounting) or `claude-p` (triage).
 
 ## Rules
 

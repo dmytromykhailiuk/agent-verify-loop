@@ -993,6 +993,7 @@ def _spawn_retro(ctx: dict, timeout: float | None, wait: bool = False) -> int:
         return 7
     _event(ctx, "retro_done", None, transport=t.name, **t.event_fields(info), session_id=info.get("session_id"),
            status=status)
+    _refresh_ledger(run_id)
     dur = util.short_dur(_duration(info, now) or 0)
     if status == "done":
         result = res.result or ""
@@ -1003,6 +1004,15 @@ def _spawn_retro(ctx: dict, timeout: float | None, wait: bool = False) -> int:
     detail = (res.stderr.strip().splitlines() or [""])[-1][:200]
     print(f"retro: {status} · {detail} · {dur}" if detail else f"retro: {status} · {dur}")
     return 1 if status == "error" else 0
+
+
+def _refresh_ledger(run_id: str) -> None:
+    from . import metrics
+
+    try:
+        metrics.refresh_ledger(run_id)
+    except Exception as e:
+        util.log_error("loop.refresh_ledger", e)
 
 
 # --------------------------------------------------------------------------- integrity check

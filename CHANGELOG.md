@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- agent-cost integration (export contract 1): with `cost_source` `auto` (default) or `agent-cost`, USD, tokens and
+  wall/active/waiting/idle time of the main session and the loop's agents come from `agent-cost export` (until the
+  run's close; `waiting_ms` missing → 0; the run window takes all four times from agent-cost); triage keeps its
+  `claude -p` numbers; any failure falls back to vloop's own accounting. Agents after the close (the retro) take
+  their numbers from a second export without `--until`, per agent with the same fallback; after `vloop spawn retro`
+  finishes, the run's ledger row and `metrics.json` are recomputed so they carry the retro's numbers. Each agent and the main session carry
+  `cost_source`, metrics carry `cost_provider`, and the digest, ledger rows and `ledger --summary` show active,
+  waiting and idle minutes; the retro policy keeps using active time. An export with non-numeric numbers falls back.
+  `cost_source` is allowed in repo config. A transport-launched retro keeps role `retro` whatever agent-cost's
+  purpose. `vloop doctor` reports agent-cost and its contract.
+- Fix: an in-session `vault-keeper` counts as the retro only when it is this run's retro, not any vault-keeper in
+  the window. Ledger `cost_usd` now includes `retro`. Agent `cost_source` is now the data origin; the former detail
+  (`estimate`, `cost-state`, …) moved to `cost_basis`.
 - Herdr integration: CLI lookup `VERIFY_HERDR_AGENT` → `HERDR_AGENT` → `PATH` → skill; `integration` number check with
   fallback to the Agent-tool transport; exit 7 (`api_error`) with hint and resume; `spawn-wait` re-sends a prompt that
   was never delivered; child edits are attributed to `HERDR_ROOT_SESSION_ID` (fallback `HERDR_PARENT_SESSION_ID`);

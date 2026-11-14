@@ -127,14 +127,14 @@ class TestMetrics(Base):
         self.assertEqual(r1["session_id"], H1)
         self.assertEqual(r1["total"], 2 * 2505)
         self.assertEqual(r1["cost_usd"], 0.42)
-        self.assertEqual(r1["cost_source"], "cost-state")
+        self.assertEqual((r1["cost_source"], r1["cost_basis"]), ("own", "cost-state"))
         self.assertEqual(r1["duration_s"], 450.0)
 
     def test_herdr_by_agent_name(self):
         qa = self.agents("qa")
         self.assertEqual(len(qa), 1)
         self.assertEqual(qa[0]["total"], 3703)
-        self.assertEqual(qa[0]["cost_source"], "estimate")
+        self.assertEqual((qa[0]["cost_source"], qa[0]["cost_basis"]), ("own", "estimate"))
         self.assertAlmostEqual(qa[0]["cost_usd"], (3 * 2 + 3000 * 2.5 + 700 * 10) / 1e6)
 
     def test_subagent_role_attribution(self):

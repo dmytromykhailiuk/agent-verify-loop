@@ -38,6 +38,7 @@
   "agent_transport_browser": true,
   "qa_browser_consent": "ask",
   "retro_policy": {"full_if_main_tokens_over": 400000, "full_if_minutes_over": 45},
+  "cost_source": "auto",
   "playwright": {"browser": "chrome", "headless": true, "isolated": true, "viewport": "1366x900",
                  "caps": "devtools,testing", "console_level": "warning", "image_responses": "omit",
                  "file_paths": "absolute"},

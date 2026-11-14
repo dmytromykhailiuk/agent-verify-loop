@@ -172,11 +172,36 @@ Effective config = defaults ⊕ user config ⊕ repo config (allowed keys only) 
 | `platforms.codex.models` | `{reviewer, qa}` model names for Codex verifiers; `null` = the session's model. |
 | `triage.*`, `models.*`, `timeouts_s`, `loop.*` | Triage model and budget, reviewer/QA models per tier, per-role timeouts, attempt limits. |
 | `qa_browser_consent` | `ask` (default). Browser QA never starts without your answer. |
+| `cost_source` | `auto` (default): take USD, tokens and wall/active/waiting/idle time of the main session and the loop's agents from [agent-cost](#integration-with-agent-cost) when it is installed, else vloop's own numbers. `own`: always vloop's own. `agent-cost`: like `auto`, but `retro-plan` prints a warning when agent-cost is unavailable. Allowed in repo config. |
 | `gate.scan_on_stop` | Per platform: scan the worktree at Stop to catch edits made through Bash (default on for Codex, which reports no edit paths for shell commands). |
 
 Prompt templates and their optional blocks are described in [docs/templates.md](docs/templates.md).
 
 Metrics count tokens and time for both platforms. USD is shown only for models listed in `config/pricing.json`.
+Every agent and the main session carry `cost_source` (`agent-cost`, `own`, or `claude-p` for triage) and a `time`
+block with wall, active, waiting and idle milliseconds (wall = active + waiting + idle). Active is time spent working;
+waiting is non-active time while one of its sub-agents ran (agent-cost only; vloop's own accounting reports 0); idle is
+the rest (waiting for the user, long pauses). `metrics.json` (`window.waiting_min`), the digest, ledger rows
+(`minutes.waiting`) and `vloop ledger --summary` show all four; the retro policy uses active time.
+
+## Integration with agent-cost
+
+agent-cost is optional. vloop finds it through `AGENT_COST_CLI`, then `agent-cost` on `PATH`, then the Claude plugin
+cache, and uses it only if `agent-cost version --json` names `agent-cost` with `contract` 1. At `retro-plan` /
+`retro-prep` it runs `agent-cost export --session <main sid> --since <run start> --until <run close, or now while open> --json` (10 s
+timeout)
+and overlays USD, tokens and time onto the main session and onto each agent matched by session id, then Herdr id.
+When agent-cost is used, the run window's wall/active/waiting/idle minutes all come from its main-session `time`
+(a missing `waiting_ms` counts as 0); phase minutes and per-phase main tokens stay vloop's own. Triage keeps the
+numbers `claude -p` reported. Agents that start after the run closed (the retro) are outside that window: vloop runs a
+second `export` without `--until` and takes only their numbers from it (`cost_provider.after_close`); after
+`vloop spawn retro` finishes it recomputes the run's ledger row and `metrics.json` so they include the retro. An agent
+agent-cost does not list, or any failure (no CLI, timeout, bad JSON, non-numeric numbers, another contract), silently falls back to vloop's own numbers; `metrics.json` records the provider and the
+reason under `cost_provider`. The retro policy compares the main session's active minutes from agent-cost when
+available. An in-session `vault-keeper` counts as the `retro` role only when it is this run's retro (agent-cost
+purpose `verify:retro` with this run id, or its prompt names this run's directory); a retro vloop launched through a
+transport (`retro_done`) stays `retro` whatever purpose agent-cost reports. `vloop doctor` shows whether
+agent-cost is detected and its contract.
 
 ## Integration with agent-vault
 

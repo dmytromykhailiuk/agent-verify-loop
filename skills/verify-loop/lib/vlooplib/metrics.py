@@ -4,6 +4,8 @@ Token accounting is deterministic: it reads the platform's transcripts (Claude C
 in-session subagents, transport-launched agent sessions), the session's event log and the run directory. Token totals
 count input + cache writes + output; cache reads are reported separately (they would otherwise dominate every total).
 USD is priced from pricing.json; a model that is not in it has no USD (None, printed as "n/a").
+When agent-cost is installed (config `cost_source`), its export overrides USD, tokens and time of the main session and
+of every agent it knows; triage keeps the numbers `claude -p` reported.
 """
 from __future__ import annotations
 
@@ -17,8 +19,8 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from . import config, paths, platforms, transports, util
-from .integrations import vault
+from . import config, paths, platforms, state, transports, util
+from .integrations import agentcost, vault
 from .transcripts import first_ts, iter_jsonl, module_for
 from .transcripts.claude import find_by_agent_name, find_session_transcript, usage_entries
 from .transcripts.claude import usage_numbers as _usage_numbers
@@ -309,7 +311,10 @@ def _gap_trimmed_minutes(timeline: list[dict], start: str | None, end: str | Non
 
 
 def policy_minutes(window: dict) -> tuple[float, str]:
-    """Minutes the retro policy compares: active (turn_duration) time, else gap-trimmed wall time, else wall time."""
+    """Minutes the retro policy compares: active time (agent-cost, else turn_duration), else gap-trimmed wall time,
+    else wall time."""
+    if window.get("active_source") == "agent-cost" and window.get("active_min") is not None:
+        return float(window["active_min"]), "active"
     if window.get("active_min"):
         return float(window["active_min"]), "active"
     if window.get("trimmed_min") is not None:
@@ -355,7 +360,8 @@ def collect_agents(ctx: dict, events: list[dict], main_path: Path | None, sid: s
             agents.append({"role": "triage", "attempt": n, "transport": "headless", "session_id": None,
                            "model": ag.get("model"), "total": total,
                            "cost_usd": float(cost) if isinstance(cost, (int, float)) else None,
-                           "cost_source": "triage.json", "duration_s": ag.get("duration_s"),
+                           "cost_source": "claude-p", "cost_basis": "triage.json",
+                           "duration_s": ag.get("duration_s"), "time": _triage_time(ag.get("duration_s")),
                            "by_model": {}, "first_ts": a.get("begin_at")})
     seen_files: set[str] = set()
     for a in ctx.get("attempts") or []:
@@ -377,17 +383,58 @@ def collect_agents(ctx: dict, events: list[dict], main_path: Path | None, sid: s
         path = _transport_transcript(dd.get("transport"), {**dd, "started_at": dd.get("started_at") or start})
         if path and str(path) in seen_files:
             continue
-        agents.append(_agent_from_file("retro", None, dd.get("transport"), dd, path, tx))
+        ag = _agent_from_file("retro", None, dd.get("transport"), dd, path, tx)
+        ag["retro_known"] = True
+        agents.append(ag)
     for sub in tx.subagents(main_path, sid, events, start, load_session_state(sid)):
         if str(sub["path"]) in seen_files:
             continue
         ft = sub.get("first_ts")
         role = _role_of(sub.get("agent_type"))
+        if role == "retro" and not _mentions_run(sub["path"], ctx.get("run_id", "")):
+            role = "other_subagents"
         ag = _agent_from_file(role, _attempt_for_ts(ctx, ft) if role in ("reviewer", "qa") else None, "agent",
                               {"session_id": None}, sub["path"], tx)
         ag["agent_type"] = sub.get("agent_type")
+        ag["agent_id"] = Path(sub["path"]).stem
         agents.append(ag)
     return agents
+
+
+def _mentions_run(path, run_id: str, limit: int = 65536) -> bool:
+    """Was this subagent started for `run_id`? Its prompt names the run dir (`.../runs/<run>/retro/task.md`)."""
+    if not run_id or not path:
+        return False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            head = f.read(limit)
+    except OSError:
+        return False
+    return f"/runs/{run_id}/" in head
+
+
+def _ms(v) -> int | None:
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _time(wall_ms, active_ms=None, waiting_ms=None) -> dict:
+    wall, active = _ms(wall_ms), _ms(active_ms)
+    waiting = _ms(waiting_ms)
+    if active is None:
+        waiting = None
+    elif waiting is None:
+        waiting = 0
+    idle = max(0, wall - active - waiting) if wall is not None and active is not None else None
+    return {"wall_ms": wall, "active_ms": active, "waiting_ms": waiting, "idle_ms": idle}
+
+
+def _triage_time(duration_s) -> dict:
+    ms = duration_s * 1000 if isinstance(duration_s, (int, float)) else None
+    return _time(ms, ms)
+
+
+def _own_time(duration_s) -> dict:
+    return _time(duration_s * 1000 if isinstance(duration_s, (int, float)) else None)
 
 
 def _agent_from_usage(role, attempt, transport, info: dict) -> dict:
@@ -407,9 +454,10 @@ def _agent_from_usage(role, attempt, transport, info: dict) -> dict:
     by_model = {model: {"requests": 0, **n, "thinking": 0, "max_context": 0, "cost_usd": _rounded(cost)}} \
         if model and total else {}
     dur = u.get("duration_s")
+    dur = dur if isinstance(dur, (int, float)) else None
     return {"role": role, "attempt": attempt, "transport": transport, "session_id": info.get("session_id"),
             "herdr_id": info.get("herdr_id"), "model": model, "total": total, "cost_usd": _rounded(cost),
-            "cost_source": source, "duration_s": dur if isinstance(dur, (int, float)) else None,
+            "cost_source": "own", "cost_basis": source, "duration_s": dur, "time": _own_time(dur),
             "by_model": by_model, "transcript": None, "first_ts": info.get("started_at")}
 
 
@@ -438,8 +486,9 @@ def _agent_from_file(role, attempt, transport, info: dict, path: Path | None, tx
     return {"role": role, "attempt": attempt, "transport": transport, "session_id": info.get("session_id"),
             "herdr_id": info.get("herdr_id"), "model": models[0] if models else info.get("model"),
             "total": agg["total"], "cost_usd": _rounded(cost),
-            "cost_source": source,
-            "duration_s": dur, "by_model": agg["by_model"], "transcript": str(path) if path else None,
+            "cost_source": "own", "cost_basis": source,
+            "duration_s": dur, "time": _own_time(dur), "by_model": agg["by_model"],
+            "transcript": str(path) if path else None,
             "first_ts": entries[0]["ts"] if entries else (first_ts(path) if path else None)}
 
 
@@ -677,7 +726,8 @@ def ledger_summary(rows: list[dict], project: str | None = None, last: int = 20)
         rows = [r for r in rows if r.get("project") == project]
     rows = rows[-last:]
     out: dict = {"project": project, "rows": len(rows), "by_change_size": {},
-                 "qa_scope": dict(Counter(r.get("qa_scope") or "none" for r in rows))}
+                 "qa_scope": dict(Counter(r.get("qa_scope") or "none" for r in rows)),
+                 "cost_source": dict(Counter(r.get("cost_source") or "own" for r in rows))}
     groups: dict[str, list] = {}
     for r in rows:
         groups.setdefault(r.get("change_size") or "unknown", []).append(r)
@@ -687,6 +737,9 @@ def ledger_summary(rows: list[dict], project: str | None = None, last: int = 20)
             "tokens_main": _median([(r.get("tokens") or {}).get("main") for r in rs]),
             "cost_total": _median([(r.get("cost_usd") or {}).get("total") for r in rs]),
             "minutes_wall": _median([(r.get("minutes") or {}).get("wall") for r in rs]),
+            "minutes_active": _median([(r.get("minutes") or {}).get("active") for r in rs]),
+            "minutes_waiting": _median([(r.get("minutes") or {}).get("waiting") for r in rs]),
+            "minutes_idle": _median([(r.get("minutes") or {}).get("idle") for r in rs]),
             "attempts": _median([r.get("attempts") for r in rs]),
         }
     return out
@@ -694,21 +747,29 @@ def ledger_summary(rows: list[dict], project: str | None = None, last: int = 20)
 
 def append_ledger(row: dict) -> bool:
     """Appends once per run_id; returns False when the run is already in the ledger."""
-    if any(r.get("run_id") == row.get("run_id") for r in read_ledger()):
-        return False
     p = ledger_path()
-    with open(p, "a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    with _ledger_lock():
+        if any(r.get("run_id") == row.get("run_id") for r in read_ledger()):
+            return False
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
     return True
+
+
+def _ledger_lock():
+    return state._flock(ledger_path().with_name(LEDGER + ".lock"), 10.0)
 
 
 def ledger_row(m: dict, ctx: dict, policy: str) -> dict:
     by_role = m["tokens"]["by_role"]
     cost_role = m["tokens"]["cost_by_role"]
-    mins = {"wall": m["window"]["wall_min"], "implement": 0.0, "verify": 0.0, "fix": 0.0}
+    w = m["window"]
+    mins = {"wall": w["wall_min"], "active": w.get("active_min"), "waiting": w.get("waiting_min"),
+            "idle": w.get("idle_min"),
+            "implement": 0.0, "verify": 0.0, "fix": 0.0}
     for ph in m["phases"]:
         key = ph["name"].split("#", 1)[0]
-        if key in mins and key != "wall":
+        if key in ("implement", "verify", "fix"):
             mins[key] = round(mins[key] + ph["wall_min"], 1)
     ch, oc = m["change"], m["outcome"]
     return {"ts": util.now_iso(), "run_id": m["run_id"], "session_id": m["session_id"], "project": m["project"],
@@ -722,9 +783,184 @@ def ledger_row(m: dict, ctx: dict, policy: str) -> dict:
             "cost_usd": {"main": _rounded(m["tokens"]["main"]["cost_usd"], 4),
                          "triage": _rounded(cost_role["triage"], 4),
                          "reviewer": _rounded(cost_role["reviewer"], 4), "qa": _rounded(cost_role["qa"], 4),
+                         "retro": _rounded(cost_role["retro"], 4),
                          "total": _rounded(m["tokens"]["cost_usd"], 4)},
+            "cost_source": (m.get("cost_provider") or {}).get("source", "own"),
             "platform": m.get("platform"),
             "minutes": mins, "retro": policy}
+
+
+def refresh_ledger(run_id: str) -> bool:
+    """Recompute this run's ledger row (and metrics.json) after its retro finished, so the row carries the retro's
+    numbers; the row keeps its original ts and retro policy. False when the run has no ledger row."""
+    if not any(r.get("run_id") == run_id for r in read_ledger()):
+        return False
+    rd = _runs_dir() / run_id
+    ctx = util.read_json(rd / "context.json")
+    if not isinstance(ctx, dict):
+        return False
+    m = compute_metrics(run_id)
+    with _ledger_lock():
+        try:
+            lines = ledger_path().read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return False
+        pos = None
+        for i, line in enumerate(lines):
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(d, dict) and d.get("run_id") == run_id:
+                pos, old = i, d
+                break
+        if pos is None:
+            return False
+        row = ledger_row(m, ctx, old.get("retro"))
+        row["ts"] = old.get("ts") or row["ts"]
+        lines[pos] = json.dumps(row, ensure_ascii=False)
+        util.atomic_write_text(ledger_path(), "".join(line + "\n" for line in lines))
+    if (rd / "retro" / "metrics.json").is_file():
+        util.atomic_write_json(rd / "retro" / "metrics.json", _public(m))
+    return True
+
+
+# --------------------------------------------------------------------------- agent-cost overlay
+
+
+AGENT_KEYS = ("role", "attempt", "transport", "session_id", "herdr_id", "model", "purpose", "total", "cost_usd",
+              "cost_source", "cost_basis", "duration_s", "time")
+
+
+def cost_setting(cfg: dict) -> str:
+    v = (cfg or {}).get("cost_source")
+    return v if v in agentcost.SOURCES else "auto"
+
+
+def _ac_tokens(tok) -> dict:
+    tok = tok if isinstance(tok, dict) else {}
+    return {k: _ms(tok.get(k)) or 0 for k in ("input", "output", "cache_creation", "cache_read")}
+
+
+def _ac_total(tok) -> int:
+    t = _ac_tokens(tok)
+    return t["input"] + t["cache_creation"] + t["output"]
+
+
+def _ac_usd(x: dict, fallback):
+    v = x.get("usd")
+    return _rounded(float(v)) if isinstance(v, (int, float)) and not isinstance(v, bool) else fallback
+
+
+def _ac_time(x: dict) -> dict:
+    t = x.get("time") if isinstance(x.get("time"), dict) else {}
+    return _time(t.get("wall_ms"), t.get("active_ms"), t.get("waiting_ms"))
+
+
+def _ac_by_model(models, own: dict) -> dict:
+    out = {}
+    for name, v in (models or {}).items():
+        if not isinstance(v, dict):
+            continue
+        t = _ac_tokens(v.get("tokens"))
+        o = own.get(name) or {}
+        out[name] = {"requests": o.get("requests", 0), "input": t["input"], "cache_write": t["cache_creation"],
+                     "cache_read": t["cache_read"], "output": t["output"], "thinking": o.get("thinking", 0),
+                     "max_context": o.get("max_context", 0), "cost_usd": _ac_usd(v, None)}
+    return out
+
+
+def _match_keys(a: dict) -> list[str]:
+    keys = [a.get("session_id")]
+    aid = a.get("agent_id")
+    if aid:
+        keys += [aid, aid[len("agent-"):] if aid.startswith("agent-") else None]
+    return [k for k in keys if k]
+
+
+def overlay_agents(agents: list[dict], export: dict, run_id: str) -> None:
+    """Replace each agent's own numbers with the agent-cost entry matched by session id, then herdr id. Triage keeps
+    its `claude -p` numbers; agents agent-cost does not know keep their own. A retro vloop launched itself keeps its
+    role whatever purpose agent-cost reports."""
+    rows = [x for x in export.get("agents") or [] if isinstance(x, dict)]
+    used: set[int] = set()
+
+    def pick(field: str, value) -> dict | None:
+        for i, x in enumerate(rows):
+            if i not in used and value and x.get(field) == value:
+                used.add(i)
+                return x
+        return None
+
+    for a in agents:
+        if a["role"] == "triage":
+            continue
+        x = next((y for y in (pick("session_id", k) for k in _match_keys(a)) if y), None) \
+            or pick("herdr_id", a.get("herdr_id"))
+        if x is None:
+            continue
+        a["own"] = {k: a.get(k) for k in ("total", "cost_usd", "time")}
+        a["total"] = _ac_total(x.get("tokens"))
+        a["cost_usd"] = _ac_usd(x, a.get("cost_usd"))
+        a["time"] = _ac_time(x)
+        if a["time"]["wall_ms"] is not None:
+            a["duration_s"] = round(a["time"]["wall_ms"] / 1000, 1)
+        if x.get("model"):
+            a["model"] = x["model"]
+        a["cost_source"], a["cost_basis"] = "agent-cost", "agent-cost"
+        purpose = x.get("purpose")
+        a["purpose"] = purpose
+        if purpose and a["role"] in ("retro", "other_subagents") and not a.get("retro_known"):
+            a["role"] = "retro" if purpose == "verify:retro" and x.get("run_id") == run_id else "other_subagents"
+
+
+def overlay_main(main: dict, export: dict) -> None:
+    x = export.get("main") or {}
+    main["own"] = {k: main.get(k) for k in ("total", "cost_usd", "time")}
+    main["total"] = _ac_total(x.get("tokens"))
+    main["cost_usd"] = _ac_usd(x, main.get("cost_usd"))
+    if isinstance(x.get("models"), dict):
+        main["by_model"] = _ac_by_model(x["models"], main.get("by_model") or {})
+    main["time"] = _ac_time(x)
+    main["cost_source"], main["cost_basis"] = "agent-cost", "agent-cost"
+
+
+def _after_close(agents: list[dict], closed_at: str | None) -> list[dict]:
+    """Agents the export ending at the close could not see (the retro): not matched yet and not triage."""
+    if not closed_at:
+        return []
+    return [a for a in agents if a["role"] != "triage" and a.get("cost_source") != "agent-cost"
+            and (a["role"] == "retro" or (a.get("first_ts") or "") >= closed_at)]
+
+
+def cost_provider(setting: str, sid, start, end) -> tuple[dict, dict | None]:
+    """({source, setting, version, contract, reason, warning}, export or None)."""
+    prov = {"source": "own", "setting": setting, "version": None, "contract": None, "reason": None, "warning": None}
+    if setting == "own":
+        prov["reason"] = "cost_source own"
+        return prov, None
+    export, why = agentcost.export(sid, start, end)
+    info = agentcost.discover()
+    if info:
+        prov.update(version=info.version, contract=info.contract)
+    if export is None:
+        prov["reason"] = why
+        if setting == "agent-cost":
+            prov["warning"] = f"cost_source agent-cost, but agent-cost is unavailable ({why}); own numbers used"
+        return prov, None
+    prov["source"] = "agent-cost"
+    return prov, export
+
+
+def _mins(ms) -> float | None:
+    return round(ms / 60000, 1) if isinstance(ms, (int, float)) else None
+
+
+def _fmt_time(t: dict | None) -> str:
+    t = t or {}
+    parts = [f"{k[:-3]} {_mins(t.get(k)):g}" for k in ("wall_ms", "active_ms", "waiting_ms", "idle_ms")
+             if t.get(k) is not None]
+    return (" · ".join(parts) + " min") if parts else "n/a"
 
 
 # --------------------------------------------------------------------------- metrics
@@ -750,11 +986,36 @@ def compute_metrics(run_id: str, *, now: str | None = None) -> dict:
         start = ctx.get("created_at") if ctx.get("kind") != "retro" else (first_ts(mp) if mp else ctx.get("created_at"))
     entries = tx.usage_entries(mp, start, end, main_only=True) if mp else []
     main = aggregate(entries)
-    main["cost_source"] = ("estimate" if main["cost_usd"] is not None else "unpriced") if mp else "missing"
+    main["cost_source"] = "own"
+    main["cost_basis"] = ("estimate" if main["cost_usd"] is not None else "unpriced") if mp else "missing"
     main["transcript"] = str(mp) if mp else None
     timeline = load_timeline(mp, start, end, plat)
     turns = _turn_durations(timeline)
     agents = collect_agents(ctx, events, mp, sid, start, end, plat)
+    closes = _run_events(events, run_id, "close")
+    closed_at = max(e.get("ts") or "" for e in closes) if closes else None
+    wall_min = _minutes(start, closed_at or end)
+    active_min = round(sum(ms for _, ms in turns) / 60000, 1)
+    main["time"] = _time(wall_min * 60000, active_min * 60000)
+    provider, export = cost_provider(cost_setting(config.load((ctx.get("repo") or {}).get("root"))), sid, start,
+                                     closed_at or end)
+    active_source = "turn_duration"
+    if export is not None:
+        overlay_main(main, export)
+        overlay_agents(agents, export, run_id)
+        late = _after_close(agents, closed_at)
+        if late:
+            later, why = agentcost.export(sid, start, None)
+            provider["after_close"] = {"agents": len(late), "status": "ok" if later is not None else why}
+            if later is not None:
+                overlay_agents(late, later, run_id)
+    mt = main["time"]
+    if export is not None and mt["wall_ms"] is not None and mt["active_ms"] is not None:
+        active_source = "agent-cost"
+        wall_min, active_min = _mins(mt["wall_ms"]), _mins(mt["active_ms"])
+        waiting_min, idle_min = _mins(mt["waiting_ms"]), _mins(mt["idle_ms"])
+    else:
+        waiting_min, idle_min = 0.0, round(max(0.0, wall_min - active_min), 1)
     by_role = {r: 0 for r in ROLES}
     cost_by_role: dict[str, float | None] = {r: 0.0 for r in ROLES}
     for a in agents:
@@ -793,29 +1054,31 @@ def compute_metrics(run_id: str, *, now: str | None = None) -> dict:
                "escalated": escalated, "inconclusive": results.count("inconclusive"),
                "browser_consent": ctx.get("browser_consent")}
     change = change_info(rd, ctx)
-    closes = _run_events(events, run_id, "close")
-    closed_at = max(e.get("ts") or "" for e in closes) if closes else None
     project = (ctx.get("repo") or {}).get("slug") or HARNESS_PROJECT
     total_tokens = main["total"] + sum(by_role.values())
     m = {
         "schema": 1, "run_id": run_id, "session_id": sid, "project": project, "platform": plat,
         "generated_at": util.now_iso(),
         "kind": ctx.get("kind", "loop"),
-        "window": {"start": start, "end": end, "wall_min": _minutes(start, closed_at or end), "closed_at": closed_at,
-                   "active_min": round(sum(ms for _, ms in turns) / 60000, 1),
+        "cost_provider": provider,
+        "window": {"start": start, "end": end, "wall_min": wall_min, "closed_at": closed_at,
+                   "active_min": active_min, "waiting_min": waiting_min, "idle_min": idle_min,
+                   "active_source": active_source,
                    "trimmed_min": _gap_trimmed_minutes(timeline, start, closed_at or end)},
         "outcome": outcome,
         "change": {k: change[k] for k in ("files", "added", "removed", "prefilter", "change_size", "risk",
                                            "qa_scope", "review_tier")},
-        "tokens": {"main": main, "agents": [{k: a.get(k) for k in ("role", "attempt", "transport", "session_id",
-                                                                    "herdr_id", "model", "total", "cost_usd",
-                                                                    "cost_source", "duration_s")} for a in agents],
+        "tokens": {"main": main, "agents": [{k: a.get(k) for k in AGENT_KEYS} for a in agents],
                    "by_role": by_role, "cost_by_role": {k: _rounded(v) for k, v in cost_by_role.items()},
                    "total": total_tokens,
                    "cost_usd": _rounded(_plus(main["cost_usd"], agents_cost)),
                    "note": "total = input + cache_write + output; cache_read is listed per model and priced; "
-                           "cost_usd is null when a model is not in pricing.json"},
+                           "cost_usd is null when a model is not in pricing.json; cost_source tells where each "
+                           "entry's USD, tokens and time come from (agent-cost, own transcripts, claude-p for "
+                           "triage); time is wall/active/waiting/idle ms (waiting: idle while a sub-agent ran); "
+                           "phase main_tokens always come from vloop's own transcript accounting"},
         "phases": phases,
+        "phases_main_tokens_source": "own",
         "signals": compute_signals(conv, events, start, end),
         "findings_history": history,
         "triage_eval": triage_eval(change, history, outcome),
@@ -947,9 +1210,12 @@ def render_digest(m: dict, budget: int = DIGEST_BUDGET) -> str:
         ("tokens", f"main {util.fmt_tokens(tk['main']['total'])} · agents {util.fmt_tokens(agents_tok)} · "
                    f"total {util.fmt_tokens(tk['total'])}"),
         ("tokens by role", " · ".join(f"{r} {util.fmt_tokens(v)}" for r, v in tk["by_role"].items() if v) or "none"),
-        ("cost", f"{money(tk['cost_usd'])} (main {money(tk['main']['cost_usd'])})"),
+        ("cost", f"{money(tk['cost_usd'])} (main {money(tk['main']['cost_usd'])}) · "
+                 f"source {(m.get('cost_provider') or {}).get('source', 'own')}"),
         ("time", f"wall {m['window']['wall_min']:g} min · active {m['window']['active_min']:g} min · "
+                 f"waiting {m['window'].get('waiting_min') or 0:g} min · idle {m['window'].get('idle_min') or 0:g} min · "
                  "policy {1} {0:g} min".format(*policy_minutes(m["window"]))),
+        ("main session time", _fmt_time(tk["main"].get("time"))),
     ]
     for cs, b in (m["baselines"].get("by_change_size") or {}).items():
         rows.append((f"baseline ({cs}, n={b['n']})",
@@ -957,7 +1223,15 @@ def render_digest(m: dict, budget: int = DIGEST_BUDGET) -> str:
                      f"{b['minutes_wall']} min · {b['attempts']} attempts"))
     out = [f"# Retro digest — run {m['run_id']}", "", "| metric | value |", "|---|---|"]
     out += [f"| {k} | {str(v).replace('|', '/')} |" for k, v in rows]
-    out += ["", "## Phases", "", "| phase | start | end | wall min | active min | main tokens | agent tokens |",
+    out += ["", "## Agents", "", "| role | attempt | transport | model | tokens | cost | time | source |",
+            "|---|---|---|---|---|---|---|---|"]
+    out += [f"| {a['role']} | {a.get('attempt') or '-'} | {a.get('transport') or '-'} | {a.get('model') or '-'} | "
+            f"{util.fmt_tokens(a.get('total') or 0)} | {money(a.get('cost_usd'))} | {_fmt_time(a.get('time'))} | "
+            f"{a.get('cost_source')} |" for a in tk["agents"]] or ["| none | | | | | | | |"]
+    out += ["", "## Phases", ""]
+    if (m.get("cost_provider") or {}).get("source") == "agent-cost":
+        out += ["Phase minutes and main tokens are vloop's own accounting (agent-cost has no per-phase split).", ""]
+    out += ["| phase | start | end | wall min | active min | main tokens | agent tokens |",
             "|---|---|---|---|---|---|---|"]
     out += [f"| {p['name']} | {_hms(p['start'])} | {_hms(p['end'])} | {p['wall_min']:g} | {p['active_min']:g} | "
             f"{util.fmt_tokens(p['main_tokens'])} | {util.fmt_tokens(p['agent_tokens'])} |" for p in m["phases"]]
@@ -1136,6 +1410,9 @@ def retro_plan(run_id: str) -> tuple[str, dict]:
                 f"{money(m['tokens']['cost_usd'])})")
         if downgraded:
             text += f"\n{retro_next(run_id, transport, m.get('platform'))}"
+    warning = (m.get("cost_provider") or {}).get("warning")
+    if warning:
+        text += f"\nwarning: {warning}"
     return text, m
 
 
@@ -1192,15 +1469,21 @@ def format_ledger_row(r: dict) -> str:
             f"attempts {r.get('attempts')}  {r.get('change_size') or '-'}  qa {r.get('qa_scope') or '-'}  "
             f"review {r.get('review_tier') or '-'}  main {util.fmt_tokens((r.get('tokens') or {}).get('main') or 0)}  "
             f"{money((r.get('cost_usd') or {}).get('total'))}  {(r.get('minutes') or {}).get('wall', 0)} min  "
-            f"retro {r.get('retro')}")
+            f"active {(r.get('minutes') or {}).get('active', '-')}  "
+            f"waiting {(r.get('minutes') or {}).get('waiting', '-')}  idle {(r.get('minutes') or {}).get('idle', '-')}  "
+            f"cost {r.get('cost_source') or 'own'}  retro {r.get('retro')}")
 
 
 def format_summary(s: dict) -> str:
     lines = [f"ledger summary · {s['project'] or 'all projects'} · last {s['rows']} rows"]
     for cs, b in sorted(s["by_change_size"].items()):
         lines.append(f"{cs}: n={b['n']} · main ≈{util.fmt_tokens(b['tokens_main'] or 0)} tokens · "
-                     f"{money(b['cost_total'])} · {b['minutes_wall']} min · {b['attempts']} attempts")
+                     f"{money(b['cost_total'])} · wall {b['minutes_wall']} · active {b.get('minutes_active')} · "
+                     f"waiting {b.get('minutes_waiting')} · idle {b.get('minutes_idle')} min · "
+                     f"{b['attempts']} attempts")
     lines.append("qa_scope: " + (", ".join(f"{k} {v}" for k, v in sorted(s["qa_scope"].items())) or "none"))
+    lines.append("cost_source: " + (", ".join(f"{k} {v}" for k, v in sorted((s.get("cost_source") or {}).items()))
+                                    or "none"))
     return "\n".join(lines)
 
 

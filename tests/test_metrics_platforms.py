@@ -97,7 +97,7 @@ class TestCodexMetrics(CodexRunCase):
         ag = [a for a in m["tokens"]["agents"] if a["role"] == "reviewer"]
         self.assertEqual(len(ag), 1)
         self.assertEqual((ag[0]["total"], ag[0]["model"], ag[0]["transport"]), (SUB_TOTAL, "gpt-5-codex", "agent"))
-        self.assertEqual(ag[0]["cost_source"], "unpriced")
+        self.assertEqual((ag[0]["cost_source"], ag[0]["cost_basis"]), ("own", "unpriced"))
         self.assertEqual(m["tokens"]["by_role"]["reviewer"], SUB_TOTAL)
         self.assertEqual(m["tokens"]["total"], MAIN_TOTAL + SUB_TOTAL)
 
@@ -114,7 +114,7 @@ class TestCodexMetrics(CodexRunCase):
         self.assertIsNone(m["tokens"]["main"]["cost_usd"])
         self.assertIsNone(m["tokens"]["cost_by_role"]["reviewer"])
         self.assertEqual(m["tokens"]["cost_by_role"]["triage"], 0.0)
-        self.assertEqual(m["tokens"]["main"]["cost_source"], "unpriced")
+        self.assertEqual(m["tokens"]["main"]["cost_basis"], "unpriced")
         for b in m["tokens"]["main"]["by_model"].values():
             self.assertIsNone(b["cost_usd"])
 
@@ -158,7 +158,7 @@ class TestCodexMetrics(CodexRunCase):
     def test_reports_print_na(self):
         m = metrics.compute_metrics(RUN, now=NOW)
         digest = metrics.render_digest(m)
-        self.assertIn("| cost | n/a (main n/a) |", digest)
+        self.assertIn("| cost | n/a (main n/a) · source own |", digest)
         self.assertEqual(metrics.money(None), "n/a")
         self.assertEqual(metrics.money(0), "≈$0")
         self.assertEqual(metrics.money(0.31), "≈$0.31")

@@ -598,7 +598,7 @@ def _scope_homes(agent: str, repo_root) -> list[tuple[str, Path]]:
 
 def diagnose(args) -> dict:
     from . import config, qatools, transports
-    from .integrations import vault
+    from .integrations import agentcost, vault
 
     repo = repo_root_for(getattr(args, "repo", None))
     state = read_state()
@@ -620,6 +620,10 @@ def diagnose(args) -> dict:
         info = vault.discover()
     except Exception:  # noqa: BLE001
         info = None
+    try:
+        cost_info, cost_why = agentcost.status()
+    except Exception as e:  # noqa: BLE001
+        cost_info, cost_why = None, f"error ({e})"
     report = {
         "python": pyplatform.python_version(),
         "skill_dir": str(skill_dir()),
@@ -631,6 +635,8 @@ def diagnose(args) -> dict:
                    "gate_mode": mode, "gate_mode_source": mode_source},
         "transport": transport,
         "agent_vault": str(info.cli) if info else None,
+        "agent_cost": {**cost_info.to_dict(), "status": "ok"} if cost_info else {"status": cost_why},
+        "cost_source": config.load(repo).get("cost_source", "auto"),
         "platforms": {"claude": paths.claude_home().is_dir() or bool(shutil.which("claude")),
                       "codex": paths.codex_home().is_dir() or bool(shutil.which("codex"))},
         "installed": {},
@@ -681,6 +687,8 @@ def diagnose(args) -> dict:
     ok_tb, tb_line = qatools.check_toolbox()
     report["browser"] = {"node": node_line, "browser": browser.describe(), "system_browser": browser.system,
                          "toolbox": tb_line, "toolbox_ok": ok_tb, "node_ok": ok_node}
+    if report["cost_source"] == "agent-cost" and not cost_info:
+        notes.append(f"cost_source is agent-cost but agent-cost is unavailable ({cost_why}); retro uses vloop's own numbers")
     report["problems"] = problems
     report["notes"] = notes
     return report
@@ -694,6 +702,13 @@ def _valid_object(path: Path) -> bool:
     return True
 
 
+def _agent_cost_line(ac: dict, setting: str | None) -> str:
+    if ac.get("cli"):
+        return (f"{_tilde(ac['cli'])} (v{ac.get('version') or '?'}, contract {ac.get('contract')}) · "
+                f"cost_source {setting}")
+    return f"not used — {ac.get('status') or 'not found'} (optional) · cost_source {setting}"
+
+
 def render_report(r: dict) -> str:
     out = [f"Python:     {r['python']}",
            f"Skill:      {_tilde(r['skill_dir'])}" + (f"  (plugin bundle {_tilde(r['plugin_bundle'])})"
@@ -705,6 +720,7 @@ def render_report(r: dict) -> str:
            + f" · gate mode: {r['config']['gate_mode']} (from {r['config']['gate_mode_source']})",
            f"Transport:  {r['transport']}",
            f"agent-vault: {_tilde(r['agent_vault']) if r['agent_vault'] else 'not found (optional)'}",
+           f"agent-cost: {_agent_cost_line(r.get('agent_cost') or {}, r.get('cost_source'))}",
            "Platforms:  " + ", ".join(f"{p} ({'detected' if ok else 'not detected'})"
                                        for p, ok in r["platforms"].items())]
     for agent, e in r["installed"].items():
