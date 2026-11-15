@@ -251,8 +251,17 @@ class TestValidateNormalize(Base):
     def test_triage_kinds(self):
         out = {"change_size": "medium", "risk": "low",
                "qa": {"scope": "run", "reason": "r", "focus": [], "needs_login": False},
-               "review": {"tier": "standard", "reason": "r", "focus": ["a"]}, "confidence": "high"}
+               "review": {"tier": "standard", "reason": "r", "focus": ["a"]},
+               "specialists": {"security": {"run": True, "reason": "r", "focus": ["auth.ts"]},
+                               "perf": {"run": False, "reason": "", "focus": []},
+                               "ux": {"run": False, "ui_spec": "n/a", "reason": "", "focus": []}},
+               "confidence": "high"}
         self.assertEqual(V.validate("triage-output", out), [])
+        self.assertIn("specialists: required", V.validate("triage-output",
+                                                          {k: v for k, v in out.items() if k != "specialists"}))
+        self.assertIn("specialists.ux.ui_spec: not in enum", V.validate(
+            "triage-output", dict(out, specialists=dict(out["specialists"], ux={"run": False, "ui_spec": "maybe",
+                                                                                 "reason": "", "focus": []}))))
         bad = dict(out, extra=1)
         self.assertIn("extra: unexpected field", V.validate("triage-output", bad))
         self.assertIn("risk: not in enum", V.validate("triage-output", dict(out, risk="huge")))
@@ -901,6 +910,290 @@ class TestRoleLine(HermeticCase):
         self.assertEqual(V.role_line("reviewer", reviewer([], verdict="inconclusive", summary="no access"), None,
                                      30, "opus/medium"),
                          "reviewer: INCONCLUSIVE · no access · opus/medium · 30s")
+
+
+
+# ------------------------------------------------------------------ specialist roles (security / perf / ux)
+
+PATCH = ("diff --git a/src/publisher.ts b/src/publisher.ts\n--- a/src/publisher.ts\n+++ b/src/publisher.ts\n"
+         "@@ -3,2 +3,4 @@ x\n line 3\n+line 4\n+line 5\n line 6\n")
+SEC_SCENARIO = "POST /publish name=../../etc → path.join in publisher.ts:5 → reads any file on the server"
+
+
+def sfinding(**kw) -> dict:
+    f = rfinding(id="SC1", category="security", line=5, scenario=SEC_SCENARIO, evidence_ref="src/publisher.ts:4",
+                 title="Path traversal in publish")
+    f.update(kw)
+    return f
+
+
+def specialist(role, findings=(), verdict="fail", **kw) -> dict:
+    v = reviewer(findings, verdict=verdict, role=role)
+    v.update(kw)
+    return v
+
+
+class SpecialistBase(Base):
+    def spec_attempt(self, n=1, roles=None, rev=None, patch=PATCH, **kw):
+        roles = roles or {}
+        plan = {"reviewer": {"run": True, "mode": "full"}, "qa": {"run": False, "scope": "none",
+                                                                   "skipped_by": "triage"}}
+        for role in roles:
+            plan[role] = {"run": True, "mode": "full"}
+        plan.update(kw.pop("plan_extra", {}))
+        a = self.attempt(n, rev=rev if rev is not None else reviewer([], verdict="pass"), plan=plan, **kw)
+        for role, v in roles.items():
+            if v is not None:
+                v = dict(v)
+                v["attempt"] = n
+                (a / f"{role}.json").write_text(json.dumps(v))
+        if patch is not None:
+            (a / "diff.patch").write_text(patch)
+        elif (a / "diff.patch").exists():
+            (a / "diff.patch").unlink()
+        return a
+
+
+class TestSpecialistNormalize(Base):
+    def test_prefixes_per_role(self):
+        for role, fp, sp in (("security", "SC", "SCS"), ("perf", "PF", "PFS"), ("ux", "UX", "UXS")):
+            raw = specialist(role, [rfinding(id="R1"), rfinding(id="x")], suggestions=["one", {"id": "S9", "text": "t"}])
+            v, _ = V.normalize(role, raw, run_id=RUN_ID, attempt=1)
+            self.assertEqual([f["id"] for f in v["findings"]], [f"{fp}1", f"{fp}2"])
+            self.assertEqual([s["id"] for s in v["suggestions"]], [f"{sp}1", f"{sp}2"])
+            self.assertEqual(v["role"], role)
+            self.assertEqual(v["findings"][0]["evidence_ref"], "")
+            self.assertEqual(V.validate(role, v), [])
+
+    def test_reviewer_keeps_old_shape(self):
+        v, _ = V.normalize("reviewer", reviewer([rfinding()]), run_id=RUN_ID, attempt=1)
+        self.assertNotIn("evidence_ref", v["findings"][0])
+        self.assertEqual(V.validate("reviewer", v), [])
+
+    def test_new_categories_and_fields_validate(self):
+        f = rfinding(id="UX1", category="accessibility", wcag="1.4.3", measurement="", evidence_ref="")
+        v, _ = V.normalize("ux", specialist("ux", [f, rfinding(id="UX2", category="usability")]), run_id=RUN_ID,
+                           attempt=1)
+        self.assertEqual(V.validate("ux", v), [])
+        self.assertTrue(V.validate("reviewer", dict(v, role="qa")))
+
+    def test_schema_mapping(self):
+        for role in ("security", "perf", "ux"):
+            self.assertEqual(V.SCHEMA_FILES[role], "reviewer.schema.json")
+
+
+class TestSecurityRules(SpecialistBase):
+    def one(self, **kw):
+        patch = kw.pop("_patch", PATCH)
+        f = sfinding(**kw)
+        self.spec_attempt(roles={"security": specialist("security", [f])}, patch=patch)
+        j = self.judge()
+        return self.rf(j, f["id"]), j
+
+    def assertDown(self, f, reason):
+        self.assertFalse(f["blocking"])
+        self.assertEqual(f["downgraded_from"], "major")
+        self.assertEqual(f["downgrade_reason"], reason)
+
+    def test_blocks_with_full_evidence(self):
+        f, j = self.one()
+        self.assertTrue(f["blocking"])
+        self.assertEqual(f["evidence_ref"], "src/publisher.ts:4")
+        self.assertEqual(j["roles"]["security"]["state"], "fail")
+        self.assertEqual(j["result"], "fail")
+        self.assertIn("security FAIL (1 major)", j["status_line"])
+        self.assertEqual(V.validate("judge", j), [])
+
+    def test_category(self):
+        f, _ = self.one(category="correctness")
+        self.assertDown(f, "category correctness is never blocking for security")
+        f, _ = self.one(category="data")
+        self.assertTrue(f["blocking"])
+
+    def test_confidence(self):
+        f, _ = self.one(confidence="low")
+        self.assertDown(f, "low confidence")
+        f, _ = self.one(confidence="medium")
+        self.assertTrue(f["blocking"])
+
+    def test_anchor(self):
+        f, _ = self.one(file="")
+        self.assertDown(f, "no file:line anchor")
+        f, _ = self.one(line=None)
+        self.assertDown(f, "no file:line anchor")
+        f, _ = self.one(file="src/nope.ts")
+        self.assertDown(f, "anchor file not found")
+        f, _ = self.one(line=99)
+        self.assertDown(f, "line out of range")
+
+    def test_scenario_length(self):
+        f, _ = self.one(scenario="x" * 39)
+        self.assertDown(f, "no concrete exploit scenario (input → sink → impact)")
+        f, _ = self.one(scenario="x" * 40)
+        self.assertTrue(f["blocking"])
+
+    def test_evidence_ref(self):
+        for bad in ("", "the publish route", "src/publisher.ts"):
+            f, _ = self.one(evidence_ref=bad)
+            self.assertDown(f, "no evidence_ref (path:line of the untrusted entry point)")
+        f, _ = self.one(evidence_ref="see src/publisher.ts:L4 (handler)")
+        self.assertTrue(f["blocking"])
+
+    def test_inside_diff(self):
+        f, _ = self.one(line=15, evidence_ref="src/other.ts:40")
+        self.assertDown(f, "pre-existing: neither the anchor nor the evidence is in the diff")
+        f, _ = self.one(line=15, evidence_ref="src/publisher.ts:4")
+        self.assertTrue(f["blocking"], "evidence inside the diff is enough")
+        f, _ = self.one(line=5, evidence_ref="src/other.ts:40")
+        self.assertTrue(f["blocking"], "anchor inside the diff is enough")
+        f, _ = self.one(line=15, evidence_ref="src/other.ts:40", _patch=None)
+        self.assertTrue(f["blocking"], "no diff.patch: the rule is not applied")
+
+    def test_patch_hunks(self):
+        self.assertIsNone(V._patch_hunks(None))
+        self.assertEqual(V._patch_hunks(PATCH), {"src/publisher.ts": [[3, 4]]})
+        new_file = "diff --git a/n.py b/n.py\nnew file mode 100644\n--- /dev/null\n+++ b/n.py\n@@ -0,0 +1 @@\n+x\n"
+        self.assertEqual(V._patch_hunks(new_file), {"n.py": [[1, 1]]})
+
+
+class TestAdvisoryRoles(SpecialistBase):
+    def test_never_block(self):
+        for role, cat in (("perf", "performance"), ("ux", "accessibility")):
+            f = rfinding(id=f"{'PF' if role == 'perf' else 'UX'}1", severity="blocker", category=cat)
+            self.spec_attempt(roles={role: specialist(role, [f, dict(f, id=f["id"][:2] + "2", severity="minor")])})
+            j = self.judge()
+            info = j["roles"][role]
+            self.assertEqual(info["state"], "pass", role)
+            self.assertTrue(info["advisory"])
+            self.assertEqual(info["blocking"], 0)
+            self.assertEqual(j["result"], "pass")
+            rec = self.rf(j, f["id"])
+            self.assertFalse(rec["blocking"])
+            self.assertEqual(rec["downgraded_from"], "blocker")
+            self.assertEqual(rec["downgrade_reason"], "advisory role")
+            report = V.render_report(j, RUN_ID)
+            self.assertIn("Advisory (never blocking):", report)
+            self.assertIn(f"{f['id']} [blocker]", report)
+            self.assertNotIn("Not blocking (downgraded)", report)
+            self.assertIn(f"{role} PASS (2 advisory)", j["status_line"])
+
+    def test_inconclusive_does_not_count(self):
+        self.spec_attempt(roles={"ux": None})
+        j = self.judge()
+        self.assertEqual(j["roles"]["ux"]["state"], "inconclusive")
+        self.assertEqual(j["result"], "pass")
+        self.assertTrue(any(w.startswith("ux inconclusive (advisory, not counted)") for w in j["warnings"]))
+
+    def test_modified_files_still_count(self):
+        a = self.spec_attempt(roles={"perf": specialist("perf", [], verdict="pass")})
+        (a / "integrity.json").write_text(json.dumps({"flagged": {"perf": ["src/publisher.ts"]}}))
+        j = self.judge()
+        self.assertEqual(j["roles"]["perf"]["state"], "inconclusive")
+        self.assertEqual(j["result"], "inconclusive")
+
+    def test_role_line(self):
+        v = specialist("perf", [rfinding(id="PF1")], verdict="fail")
+        self.assertTrue(V.role_line("perf", v, None, 30).startswith("perf: FAIL (advisory) · 1 major"))
+
+
+class TestSpecialistJudge(SpecialistBase):
+    def test_omitted_when_not_run(self):
+        plan_extra = {"security": {"run": False, "carried_from": None}}
+        self.spec_attempt(plan_extra=plan_extra)
+        j = self.judge()
+        self.assertEqual(list(j["roles"]), ["reviewer", "qa"])
+        self.assertNotIn("security", j["status_line"])
+        self.assertEqual(V.validate("judge", j), [])
+
+    def test_old_plan_and_old_judge(self):
+        self.attempt(1, rev=reviewer([rfinding()]), q=qa())
+        j1 = self.judge(1)
+        self.assertEqual(list(j1["roles"]), ["reviewer", "qa"])
+        old = dict(j1)
+        old["findings"] = [{k: v for k, v in f.items() if k != "duplicate_of"} for f in j1["findings"]]
+        (self.run / "attempt-1" / "judge.json").write_text(json.dumps(old))
+        self.assertIn("review FAIL", V.status_line(old))
+        self.assertIn("Blocking:", V.render_report(old, RUN_ID))
+        plan = {"reviewer": {"run": True}, "qa": {"run": False, "carried_from": 1}}
+        self.attempt(2, rev=reviewer([rfinding(status="fixed")], verdict="pass"), plan=plan, hunks={})
+        j2 = self.judge(2)
+        self.assertEqual(j2["roles"]["qa"]["carried_from"], 1)
+        self.assertEqual(list(j2["roles"]), ["reviewer", "qa"])
+
+    def test_order_and_status_line(self):
+        self.spec_attempt(roles={"ux": specialist("ux", [], verdict="pass"),
+                                 "security": specialist("security", [], verdict="pass"),
+                                 "perf": specialist("perf", [], verdict="pass")})
+        j = self.judge()
+        self.assertEqual(list(j["roles"]), ["reviewer", "security", "perf", "ux", "qa"])
+        self.assertEqual(j["status_line"], "verify-loop · attempt 1 · failures 0/3 · review PASS · security PASS · "
+                                           "perf PASS · ux PASS · qa SKIPPED (triage: none)")
+
+    def test_carried_specialist(self):
+        self.spec_attempt(roles={"security": specialist("security", [sfinding()])})
+        self.assertEqual(self.judge(1)["result"], "fail")
+        self.spec_attempt(2, rev=reviewer([], verdict="pass"), hunks={},
+                          plan_extra={"security": {"run": False, "carried_from": 1}})
+        j = self.judge(2)
+        self.assertTrue(j["roles"]["security"]["carried"])
+        self.assertEqual(self.rf(j, "SC1")["role"], "security")
+        self.assertEqual(j["result"], "fail")
+
+    def test_dedupe(self):
+        dup = rfinding(id="R1", category="security", line=6, scenario=SEC_SCENARIO)
+        other = rfinding(id="R2", line=6)
+        far = rfinding(id="R3", category="security", line=12)
+        self.spec_attempt(rev=reviewer([dup, other, far]), roles={"security": specialist("security", [sfinding()])})
+        j = self.judge()
+        r1 = self.rf(j, "R1")
+        self.assertEqual(r1["duplicate_of"], "SC1")
+        self.assertFalse(r1["blocking"])
+        self.assertIsNone(self.rf(j, "R2")["duplicate_of"])
+        self.assertTrue(self.rf(j, "R2")["blocking"])
+        self.assertIsNone(self.rf(j, "R3")["duplicate_of"])
+        self.assertEqual(j["roles"]["reviewer"]["blocking"], 2)
+        self.assertIn("Duplicates (not blocking): R1 = SC1", V.render_report(j, RUN_ID))
+
+    def test_dedupe_turns_reviewer_fail_into_pass(self):
+        dup = rfinding(id="R1", category="security", line=5, scenario=SEC_SCENARIO)
+        self.spec_attempt(rev=reviewer([dup]), roles={"security": specialist("security", [sfinding()])})
+        j = self.judge()
+        self.assertEqual(j["roles"]["reviewer"]["state"], "pass")
+        self.assertEqual(j["roles"]["reviewer"]["blocking"], 0)
+        self.assertEqual(j["roles"]["security"]["state"], "fail")
+        self.assertEqual(j["result"], "fail")
+
+    def _kept_blocking(self, role, finding):
+        rev = rfinding(id="R1", category=finding["category"], line=5)
+        self.spec_attempt(rev=reviewer([rev]), roles={role: specialist(role, [finding])})
+        j = self.judge()
+        r1 = self.rf(j, "R1")
+        self.assertTrue(r1["blocking"])
+        self.assertIsNone(r1["duplicate_of"])
+        self.assertEqual(j["roles"]["reviewer"]["state"], "fail")
+        self.assertEqual(j["result"], "fail")
+
+    def test_dedupe_skips_advisory_ux(self):
+        self._kept_blocking("ux", rfinding(id="UX1", category="correctness", line=5))
+
+    def test_dedupe_skips_advisory_perf(self):
+        self._kept_blocking("perf", rfinding(id="PF1", category="correctness", line=5))
+
+    def test_dedupe_skips_downgraded_security(self):
+        self._kept_blocking("security", sfinding(confidence="low"))
+
+    def test_report_shows_entry_point_and_escalation(self):
+        self.spec_attempt(roles={"security": specialist("security", [sfinding()])})
+        j = self.judge()
+        report = V.render_report(j, RUN_ID)
+        self.assertIn("SC1 [major·security·high] src/publisher.ts:5 — Path traversal in publish", report)
+        self.assertIn("entry point: src/publisher.ts:4", report)
+        esc = V.render_escalation(self.run)
+        self.assertIn("SC1 [major] src/publisher.ts:5", esc)
+
+    def test_standalone_review_prefix(self):
+        judge = J(kind="standalone", roles={"reviewer": R("pass"), "security": R("pass")})
+        self.assertTrue(V.status_line(judge).startswith("verify-review · attempt 1 · review PASS · security PASS"))
 
 
 if __name__ == "__main__":

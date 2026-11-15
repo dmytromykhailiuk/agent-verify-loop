@@ -13,12 +13,16 @@ import tempfile
 from pathlib import Path
 
 from . import paths
+from .roles import ADVISORY_ROLES, ALL_ROLES, PREFIX, REVIEW_ROLES, SPECIALISTS, SUGGESTION_PREFIX
 
-ROLES = ("reviewer", "qa")
+ROLES = ALL_ROLES
 SCHEMA_FILES = {
     "triage-output": "triage.output.schema.json",
     "triage": "triage.schema.json",
     "reviewer": "reviewer.schema.json",
+    "security": "reviewer.schema.json",
+    "perf": "reviewer.schema.json",
+    "ux": "reviewer.schema.json",
     "qa": "qa.schema.json",
     "judge": "judge.schema.json",
 }
@@ -29,6 +33,9 @@ def _vl() -> str:
 
 
 REVIEW_BLOCKING_CATEGORIES = {"correctness", "security", "data", "contract", "acceptance", "convention", "build"}
+SECURITY_BLOCKING_CATEGORIES = {"security", "data"}
+SECURITY_SCENARIO_MIN = 40
+ADVISORY_REASON = "advisory role"
 QA_BLOCKING_CATEGORIES = {"acceptance", "regression", "crash", "build", "data", "security"}
 CLOSED_STATUSES = {"fixed", "withdrawn"}
 AUTH_NEEDS = {"auth_missing", "auth_expired"}
@@ -288,6 +295,7 @@ def _fix(obj: dict, key: str, expected, warnings: list[str]) -> None:
 REVIEW_FINDING_DEFAULTS = {"file": "", "line": None, "end_line": None, "scenario": "", "suggestion": "",
                            "criterion": "", "convention_ref": "", "command": "", "status": "new",
                            "missed_earlier": False, "missed_reason": ""}
+SPECIALIST_FINDING_DEFAULTS = {"evidence_ref": "", "measurement": "", "wcag": ""}
 QA_CHECK_DEFAULTS = {"evidence": [], "notes": "", "need": None, "logged_in": False}
 QA_FINDING_DEFAULTS = {"check_id": "", "expected": "", "actual": "", "repro": [], "evidence": [], "file": "",
                        "line": None, "url": "", "command": "", "pre_existing": "no", "status": "new"}
@@ -329,7 +337,7 @@ def _norm_suggestions(o: dict, prefix: str, warnings: list[str]) -> None:
     o["suggestions"] = out
 
 
-def _norm_reviewer(o: dict, warnings: list[str]) -> None:
+def _norm_reviewer(o: dict, warnings: list[str], role: str = "reviewer") -> None:
     findings = o.get("findings")
     if isinstance(findings, list):
         for i, f in enumerate(findings):
@@ -339,13 +347,16 @@ def _norm_reviewer(o: dict, warnings: list[str]) -> None:
                 warnings.append(f"findings[{i}].severity: 'nit' mapped to 'minor'")
                 f["severity"] = "minor"
             _defaults(f, REVIEW_FINDING_DEFAULTS)
+            if role != "reviewer":
+                _defaults(f, SPECIALIST_FINDING_DEFAULTS)
             for key in ("line", "end_line"):
                 _fix_line(f, key, f"findings[{i}]", warnings)
-            for key in ("file", "scenario", "suggestion", "criterion", "convention_ref", "command", "missed_reason"):
-                if f.get(key) is None:
+            for key in ("file", "scenario", "suggestion", "criterion", "convention_ref", "command", "missed_reason",
+                        "evidence_ref", "measurement", "wcag"):
+                if key in f and f.get(key) is None:
                     f[key] = ""
-        _renumber(findings, "R", "findings", warnings)
-    _norm_suggestions(o, "S", warnings)
+        _renumber(findings, PREFIX[role], "findings", warnings)
+    _norm_suggestions(o, SUGGESTION_PREFIX[role], warnings)
     if o.get("rechecked") is None:
         o["rechecked"] = []
     if isinstance(o.get("rechecked"), list):
@@ -409,6 +420,20 @@ def _norm_triage(o: dict, warnings: list[str]) -> None:
             sub.setdefault("focus", [])
             if part == "qa":
                 sub.setdefault("needs_login", False)
+    spec = o.get("specialists")
+    if not isinstance(spec, dict):
+        spec = {}
+    for role in ("security", "perf", "ux"):
+        sub = spec.get(role)
+        if not isinstance(sub, dict):
+            sub = {"run": bool(sub)} if isinstance(sub, bool) else {}
+        sub.setdefault("run", False)
+        sub.setdefault("reason", "")
+        sub.setdefault("focus", [])
+        if role == "ux":
+            sub.setdefault("ui_spec", "n/a")
+        spec[role] = sub
+    o["specialists"] = spec
     o.setdefault("agent", None)
 
 
@@ -418,7 +443,8 @@ def normalize(kind: str, obj: dict, *, run_id: str | None = None, attempt: int |
     if not isinstance(obj, dict):
         return obj, ["not an object"]
     o = copy.deepcopy(obj)
-    if kind in ("reviewer", "qa", "triage"):
+    verdict_kinds = (*REVIEW_ROLES, "qa", "triage")
+    if kind in verdict_kinds:
         if o.get("schema") is None:
             o["schema"] = 1 if kind == "triage" else 2
         _fix(o, "role", kind, warnings)
@@ -426,20 +452,20 @@ def normalize(kind: str, obj: dict, *, run_id: str | None = None, attempt: int |
         if attempt is not None and isinstance(o.get("attempt"), str) and o["attempt"].strip() == str(attempt):
             o["attempt"] = attempt
         _fix(o, "attempt", attempt, warnings)
-    if kind in ("reviewer", "qa") and mode is not None:
+    if kind in (*REVIEW_ROLES, "qa") and mode is not None:
         if o.get("mode") not in ("full", "recheck", "delta"):
             if o.get("mode") is not None:
                 warnings.append(f"mode: {o['mode']!r} replaced with {mode!r}")
             o["mode"] = mode
     schema = load_schema(kind)
     o = _coerce(schema, o, "", warnings)
-    if kind == "reviewer":
-        _norm_reviewer(o, warnings)
+    if kind in REVIEW_ROLES:
+        _norm_reviewer(o, warnings, kind)
     elif kind == "qa":
         _norm_qa(o, warnings)
     elif kind == "triage":
         _norm_triage(o, warnings)
-    if kind in ("reviewer", "qa", "triage"):
+    if kind in verdict_kinds:
         o = _coerce(schema, o, "", warnings)
     return o, warnings
 
@@ -570,15 +596,34 @@ def _anchor_changed(hunks: dict, file: str, line) -> bool:
     return False
 
 
-def _review_rules(f: dict, env: dict) -> str | None:
-    cat = f.get("category")
-    if cat not in REVIEW_BLOCKING_CATEGORIES:
-        return f"category {cat} is never blocking"
-    if f.get("confidence") == "low":
-        return "low confidence"
+_HUNK_HEAD = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def _patch_hunks(patch: str | None) -> dict | None:
+    """New-side hunk ranges per file from a unified diff: {path: [[start, count], …]}; None without a patch."""
+    if patch is None:
+        return None
+    out: dict = {}
+    path = None
+    for ln in patch.splitlines():
+        if ln.startswith("diff --git "):
+            m = re.match(r"diff --git a/(.*) b/(.*)$", ln)
+            path = m.group(2) if m else None
+        elif ln.startswith("+++ "):
+            target = ln[4:].strip().strip('"')
+            if target != "/dev/null":
+                path = target[2:] if target.startswith("b/") else target
+        else:
+            m = _HUNK_HEAD.match(ln)
+            if m and path:
+                out.setdefault(path, []).append([int(m.group(1)), int(m.group(2) if m.group(2) is not None else 1)])
+    return out
+
+
+def _anchor_reason(f: dict, env: dict, *, need_anchor: bool = True) -> str | None:
     file = f.get("file") or ""
     line = f.get("line")
-    if cat != "build" and (not file or not (_is_int(line) and line >= 1)):
+    if need_anchor and (not file or not (_is_int(line) and line >= 1)):
         return "no file:line anchor"
     if env["code_ref"] == "worktree" and file and env["root"]:
         if not os.path.isfile(os.path.join(env["root"], file)):
@@ -588,6 +633,58 @@ def _review_rules(f: dict, env: dict) -> str | None:
             n = _line_count(env["root"], file)
             if n is not None and line > n:
                 return "line out of range"
+    return None
+
+
+def _late_reason(f: dict, env: dict) -> str | None:
+    file = f.get("file") or ""
+    if env["attempt"] >= 2 and f.get("status") == "new" and file and env["hunks"] is not None:
+        if not _anchor_changed(env["hunks"], file, f.get("line")):
+            if f.get("missed_earlier") is True and len((f.get("missed_reason") or "").strip()) >= 20:
+                f["_late"] = True
+            else:
+                return f"new finding on code unchanged since attempt {env['attempt'] - 1}"
+    return None
+
+
+_EVIDENCE_REF = re.compile(r"([^\s,;:()\[\]`'\"]+):L?(\d+)")
+
+
+def _security_rules(f: dict, env: dict) -> str | None:
+    cat = f.get("category")
+    if cat not in SECURITY_BLOCKING_CATEGORIES:
+        return f"category {cat} is never blocking for security"
+    if f.get("confidence") not in ("high", "medium"):
+        return "low confidence"
+    reason = _anchor_reason(f, env)
+    if reason:
+        return reason
+    if len((f.get("scenario") or "").strip()) < SECURITY_SCENARIO_MIN:
+        return "no concrete exploit scenario (input → sink → impact)"
+    m = _EVIDENCE_REF.search(f.get("evidence_ref") or "")
+    if not m:
+        return "no evidence_ref (path:line of the untrusted entry point)"
+    patch = env.get("patch_hunks")
+    if patch is not None:
+        if not (_anchor_changed(patch, f.get("file") or "", f.get("line"))
+                or _anchor_changed(patch, m.group(1), int(m.group(2)))):
+            return "pre-existing: neither the anchor nor the evidence is in the diff"
+    return _late_reason(f, env)
+
+
+def _advisory_rules(f: dict, env: dict) -> str | None:
+    return ADVISORY_REASON
+
+
+def _review_rules(f: dict, env: dict) -> str | None:
+    cat = f.get("category")
+    if cat not in REVIEW_BLOCKING_CATEGORIES:
+        return f"category {cat} is never blocking"
+    if f.get("confidence") == "low":
+        return "low confidence"
+    reason = _anchor_reason(f, env, need_anchor=cat != "build")
+    if reason:
+        return reason
     if cat == "build" and not (f.get("command") or "").strip():
         return "build finding without the failing command"
     if len((f.get("scenario") or "").strip()) < 30:
@@ -596,13 +693,10 @@ def _review_rules(f: dict, env: dict) -> str | None:
         return "convention finding without proof (convention_ref)"
     if cat == "acceptance" and not (f.get("criterion") or "").strip():
         return "acceptance finding without the criterion"
-    if env["attempt"] >= 2 and f.get("status") == "new" and file and env["hunks"] is not None:
-        if not _anchor_changed(env["hunks"], file, line):
-            if f.get("missed_earlier") is True and len((f.get("missed_reason") or "").strip()) >= 20:
-                f["_late"] = True
-            else:
-                return f"new finding on code unchanged since attempt {env['attempt'] - 1}"
-    return None
+    return _late_reason(f, env)
+
+
+RULES = {"reviewer": _review_rules, "security": _security_rules, "perf": _advisory_rules, "ux": _advisory_rules}
 
 
 def _qa_rules(f: dict, failing_checks: set[str]) -> str | None:
@@ -634,14 +728,15 @@ def _waived_ids(ctx: dict) -> set[str]:
 
 def _finding_record(role: str, f: dict, checks_by_id: dict) -> dict:
     check = checks_by_id.get(f.get("check_id") or "") if role == "qa" else None
-    return {
+    review = role in REVIEW_ROLES
+    rec = {
         "role": role, "id": f.get("id"), "severity": f.get("severity"), "blocking": False, "late": False,
         "stuck": False, "waived": False, "downgraded_from": None, "downgrade_reason": None,
         "category": f.get("category"), "confidence": f.get("confidence"),
         "file": f.get("file") or "", "line": f.get("line"),
-        "title": f.get("title") or "", "problem": f.get("problem") if role == "reviewer" else None,
-        "scenario": f.get("scenario") if role == "reviewer" else None,
-        "suggestion": f.get("suggestion") if role == "reviewer" else None,
+        "title": f.get("title") or "", "problem": f.get("problem") if review else None,
+        "scenario": f.get("scenario") if review else None,
+        "suggestion": f.get("suggestion") if review else None,
         "check_id": f.get("check_id") or None if role == "qa" else None,
         "expected": f.get("expected") if role == "qa" else None,
         "actual": f.get("actual") if role == "qa" else None,
@@ -652,9 +747,14 @@ def _finding_record(role: str, f: dict, checks_by_id: dict) -> dict:
         "criterion": (check or {}).get("criterion") if role == "qa" else (f.get("criterion") or ""),
         "command": f.get("command") or "",
         "url": f.get("url") or "" if role == "qa" else "",
-        "missed_earlier": bool(f.get("missed_earlier")) if role == "reviewer" else False,
+        "missed_earlier": bool(f.get("missed_earlier")) if review else False,
         "carried": False,
+        "duplicate_of": None,
     }
+    if role in SPECIALISTS:
+        for key in ("evidence_ref", "measurement", "wcag"):
+            rec[key] = f.get(key) or ""
+    return rec
 
 
 def _evaluate(role: str, v: dict, env: dict) -> tuple[list[dict], dict]:
@@ -669,7 +769,7 @@ def _evaluate(role: str, v: dict, env: dict) -> tuple[list[dict], dict]:
         rec = _finding_record(role, f, checks_by_id)
         if f.get("severity") in ("blocker", "major"):
             f = dict(f)
-            reason = _review_rules(f, env) if role == "reviewer" else _qa_rules(f, failing)
+            reason = RULES[role](f, env) if role in RULES else _qa_rules(f, failing)
             if reason:
                 rec["downgraded_from"] = rec["severity"]
                 rec["severity"] = "minor"
@@ -761,6 +861,56 @@ def _carried_from_judge(run_dir: Path, role: str, k: int, waived: set[str]) -> t
     return info, findings, sugg, unver
 
 
+def judged_roles(ctx: dict, plan: dict) -> list[str]:
+    """Roles the judge reports, in display order: the context's reviewer/QA as before, plus every specialist the
+    plan ran or carried. A specialist missing from the plan did not run and is omitted."""
+    listed = set(ctx.get("roles") or [])
+    planned = plan.get("roles") if isinstance(plan.get("roles"), dict) else {}
+    out = []
+    for role in ALL_ROLES:
+        if role in SPECIALISTS:
+            pr = planned.get(role)
+            if isinstance(pr, dict) and (pr.get("run") or pr.get("carried_from") is not None):
+                out.append(role)
+        elif role in listed:
+            out.append(role)
+    return out
+
+
+def _near(a, b) -> bool:
+    return _is_int(a) and _is_int(b) and abs(a - b) <= 3
+
+
+def _dedupe(roles: dict, findings: list[dict]) -> None:
+    """A reviewer finding that repeats a blocking specialist finding (same file, line ±3, same category) is non-blocking."""
+    spec = [f for f in findings if f.get("role") in SPECIALISTS and f.get("file")
+            and f.get("blocking") and not f.get("waived")]
+    if not spec:
+        return
+    changed = False
+    for f in findings:
+        if f.get("role") != "reviewer" or not f.get("file"):
+            continue
+        for s in spec:
+            if s["file"] == f["file"] and s.get("category") == f.get("category") and _near(s.get("line"), f.get("line")):
+                f["duplicate_of"] = s["id"]
+                if f.get("blocking"):
+                    f["blocking"] = False
+                    changed = True
+                break
+    info = roles.get("reviewer")
+    if not changed or not info:
+        return
+    recs = [f for f in findings if f.get("role") == "reviewer"]
+    blocking = [f for f in recs if f.get("blocking")]
+    info["blocking"] = len(blocking)
+    info["minor"] = sum(1 for f in recs if not f.get("blocking") and not f.get("waived"))
+    info["blocking_by_severity"] = {s: sum(1 for f in blocking if f.get("severity") == s) for s in ("blocker", "major")}
+    if info.get("state") == "fail" and not blocking:
+        info["state"] = "pass"
+        info.setdefault("notes", []).append("normalized: blocking findings duplicate specialist findings")
+
+
 def modified_reason(paths) -> str:
     """Integrity check: a verifier changed the worktree (§ integrity). Always INCONCLUSIVE, never PASS."""
     return f"verifier modified files: {_fmt_paths(paths)}"
@@ -788,7 +938,7 @@ def judge_attempt(run_dir: Path, attempt: int, *, elapsed_s: float | None = None
     suggestions: list[dict] = []
     unverified: list[dict] = []
 
-    for role in [r for r in ROLES if r in (ctx.get("roles") or [])]:
+    for role in judged_roles(ctx, plan):
         pr = (plan.get("roles") or {}).get(role) or {}
         if pr.get("run"):
             att, carried_from = attempt, None
@@ -798,6 +948,8 @@ def judge_attempt(run_dir: Path, attempt: int, *, elapsed_s: float | None = None
             if got:
                 info, fl, sl, ul = got
                 info.setdefault("verdict_path", f"attempt-{att}/{role}.json")
+                if role in ADVISORY_ROLES:
+                    info["advisory"] = True
                 roles[role] = info
                 findings += fl
                 suggestions += sl
@@ -813,6 +965,8 @@ def judge_attempt(run_dir: Path, attempt: int, *, elapsed_s: float | None = None
 
         vpath = f"attempt-{att}/{role}.json"
         info = _role_base("pass", carried_from, vpath)
+        if role in ADVISORY_ROLES:
+            info["advisory"] = True
         modified = list(integrity.get(role) or []) if att == attempt else []
         if modified:
             info["modified_files"] = modified
@@ -837,11 +991,16 @@ def judge_attempt(run_dir: Path, attempt: int, *, elapsed_s: float | None = None
             hunks = _read_json(run_dir / f"attempt-{att}" / "delta.hunks.json")
             if not isinstance(hunks, dict):
                 hunks = None
-                if role == "reviewer":
+                if role in ("reviewer", "security"):
                     warnings.append(f"attempt-{att}/delta.hunks.json missing: late rule not applied")
+        patch_hunks = None
+        if role == "security":
+            patch_path = run_dir / f"attempt-{att}" / "diff.patch"
+            patch_hunks = _patch_hunks(patch_path.read_text(encoding="utf-8", errors="replace")
+                                       if patch_path.is_file() else None)
         env = {"code_ref": (ctx.get("target") or {}).get("code_ref") or "worktree",
                "root": (ctx.get("repo") or {}).get("root"), "deleted": _deleted_files(run_dir, att),
-               "attempt": att, "hunks": hunks, "waived": waived, "disputes": disputes}
+               "attempt": att, "hunks": hunks, "waived": waived, "disputes": disputes, "patch_hunks": patch_hunks}
         recs, checks_by_id = _evaluate(role, v, env)
         if carried_from is not None:
             for r in recs:
@@ -918,7 +1077,15 @@ def judge_attempt(run_dir: Path, attempt: int, *, elapsed_s: float | None = None
         if f.get("status") == "still_present" and prev_status.get((f["role"], f["id"])) in ("still_present", "new"):
             f["stuck"] = True
 
-    states = [r["state"] for r in roles.values()]
+    _dedupe(roles, findings)
+
+    states = []
+    for role, info in roles.items():
+        if info.get("advisory") and info["state"] == "inconclusive" and not info.get("modified_files"):
+            warnings.append(f"{role} inconclusive (advisory, not counted): "
+                            f"{(info.get('reasons') or ['inconclusive'])[0]}")
+            continue
+        states.append(info["state"])
     result = "fail" if "fail" in states else "inconclusive" if "inconclusive" in states else "pass"
 
     old = _read_json(adir / "judge.json")
@@ -957,7 +1124,7 @@ def judge_attempt(run_dir: Path, attempt: int, *, elapsed_s: float | None = None
 # ---------------------------------------------------------------- rendering
 
 def _role_piece(role: str, info: dict, judge: dict) -> str:
-    name = "review" if role == "reviewer" else "qa"
+    name = "review" if role == "reviewer" else role
     state = info.get("state")
     inner: list[str] = []
     if info.get("carried") and info.get("carried_from") is not None:
@@ -972,6 +1139,9 @@ def _role_piece(role: str, info: dict, judge: dict) -> str:
         inner.append((info.get("reasons") or ["inconclusive"])[0])
     elif state == "fail":
         inner.append(_plural_counts(info.get("blocking_by_severity") or {}) or f"{info.get('blocking', 0)} blocking")
+    elif state == "pass" and role in ADVISORY_ROLES:
+        if info.get("minor"):
+            inner.append(f"{info['minor']} advisory")
     elif state == "pass" and role == "qa":
         ch = info.get("checks") or {}
         p, f = ch.get("pass", 0), ch.get("fail", 0)
@@ -991,7 +1161,7 @@ def _prefix(judge: dict) -> str:
     if judge.get("kind") != "standalone":
         return "verify-loop"
     active = [r for r in (judge.get("roles") or {})]
-    if active == ["reviewer"]:
+    if active and "reviewer" in active and all(r in REVIEW_ROLES for r in active):
         return "verify-review"
     if active == ["qa"]:
         return "verify-qa"
@@ -1019,7 +1189,7 @@ def _anchor(f: dict) -> str:
 
 
 def _blocking_lines(f: dict) -> list[str]:
-    if f["role"] == "reviewer":
+    if f["role"] in REVIEW_ROLES:
         anchor = _anchor(f)
         head = f"  {f['id']} [{f['severity']}·{f.get('category')}·{f.get('confidence')}]"
         head += f" {anchor} — {f.get('title')}" if anchor else f" — {f.get('title')}"
@@ -1030,6 +1200,8 @@ def _blocking_lines(f: dict) -> list[str]:
         out = [head]
         if f.get("scenario"):
             out.append(f"     scenario: {_clip(f['scenario'], 160)}")
+        if f.get("evidence_ref"):
+            out.append(f"     entry point: {_clip(f['evidence_ref'], 120)}")
         if f.get("suggestion"):
             out.append(f"     fix: {_clip(f['suggestion'], 160)}")
     else:
@@ -1090,11 +1262,25 @@ def render_report(judge: dict, run_id: str, *, next_hint: bool = True) -> str:
         lines.append("Blocking:")
         for f in blocking:
             lines += _blocking_lines(f)
-    down = [f for f in findings if f.get("downgraded_from") and not f.get("waived")]
+    down = [f for f in findings if f.get("downgraded_from") and not f.get("waived")
+            and f.get("downgrade_reason") != ADVISORY_REASON]
     if down:
         lines.append("Not blocking (downgraded): " + " · ".join(
             f"{f['id']} {f['downgraded_from']}→minor ({f.get('downgrade_reason')})" for f in down))
-    minor = [f for f in findings if not f.get("blocking") and not f.get("downgraded_from") and not f.get("waived")]
+    dups = [f for f in findings if f.get("duplicate_of") and not f.get("waived")]
+    if dups:
+        lines.append("Duplicates (not blocking): " + " · ".join(f"{f['id']} = {f['duplicate_of']}" for f in dups))
+    advisory = [f for f in findings if f.get("downgrade_reason") == ADVISORY_REASON and not f.get("waived")
+                or f.get("role") in ADVISORY_ROLES and not f.get("downgraded_from") and not f.get("waived")]
+    if advisory:
+        bits = []
+        for f in advisory:
+            anchor = _anchor(f)
+            sev = f.get("downgraded_from") or f.get("severity")
+            bits.append(f"{f['id']} [{sev}] {anchor + ' — ' if anchor else '— '}{_clip(f.get('title'), 80)}")
+        lines.append("Advisory (never blocking): " + " · ".join(bits))
+    minor = [f for f in findings if not f.get("blocking") and not f.get("downgraded_from") and not f.get("waived")
+             and not f.get("duplicate_of") and f.get("role") not in ADVISORY_ROLES]
     if minor:
         bits = []
         for f in minor:
@@ -1172,10 +1358,11 @@ def render_escalation(run_dir: Path) -> str:
 
     rulings: dict = {}
     if last:
-        rv = _read_json(run_dir / f"attempt-{last['attempt']}" / "reviewer.json", {}) or {}
-        for r in rv.get("rechecked") or []:
-            if isinstance(r, dict) and r.get("dispute_ruling") == "upheld":
-                rulings[r.get("id")] = r.get("note") or ""
+        for role in REVIEW_ROLES:
+            rv = _read_json(run_dir / f"attempt-{last['attempt']}" / f"{role}.json", {}) or {}
+            for r in rv.get("rechecked") or []:
+                if isinstance(r, dict) and r.get("dispute_ruling") == "upheld":
+                    rulings[r.get("id")] = r.get("note") or ""
 
     still = [f for f in last.get("findings") or [] if f.get("blocking")]
     body: list[str] = []
@@ -1183,7 +1370,7 @@ def render_escalation(run_dir: Path) -> str:
         seen = [j["attempt"] for j in judges
                 if any(g.get("id") == f["id"] and g.get("role") == f["role"] for g in j.get("findings") or [])]
         tag = f"{f['severity']}·stuck" if f.get("stuck") else f["severity"]
-        if f["role"] == "reviewer":
+        if f["role"] in REVIEW_ROLES:
             anchor = _anchor(f)
             text = f"  {f['id']} [{tag}] {anchor + ' — ' if anchor else '— '}{_clip(f.get('title'), 70)}"
         else:
@@ -1263,13 +1450,13 @@ def role_line(role: str, verdict: dict | None, error: dict | None, duration_s: f
             text = "no verdict"
         return " · ".join([f"{role}: INCONCLUSIVE", text] + dur)
     v = verdict["verdict"]
-    head = f"{role}: {v.upper()}"
+    head = f"{role}: {v.upper()}" + (" (advisory)" if role in ADVISORY_ROLES else "")
     open_f = [f for f in verdict.get("findings") or []
               if isinstance(f, dict) and f.get("status") not in CLOSED_STATUSES]
     sev = {s: sum(1 for f in open_f if f.get("severity") == s) for s in ("blocker", "major", "minor")}
     if v == "inconclusive":
         return " · ".join([head, _clip(verdict.get("summary") or "inconclusive", 60)] + me + dur)
-    if role == "reviewer":
+    if role in REVIEW_ROLES:
         n_sugg = len(verdict.get("suggestions") or [])
         if v == "pass":
             mid = f"{sev['blocker'] + sev['major']} blocking, {sev['minor']} minor, {n_sugg} suggestions"

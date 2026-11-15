@@ -111,7 +111,7 @@ class BriefTest(h.Case):
 
     def test_brief_plans_renders_and_sets_inflight(self):
         out = self.brief(self.rid)
-        self.assertTrue(out.startswith("verify-loop · plan · attempt 1 · triage haiku (6s, ≈$0.0042, confidence high)"))
+        self.assertTrue(out.startswith("verify-loop · plan · attempt 1 · triage sonnet (6s, ≈$0.0042, confidence high)"))
         att = self.run_dir(self.rid) / "attempt-1"
         for f in ("triage.input.md", "triage.json", "plan.json", "reviewer.prompt.md", "qa.prompt.md"):
             self.assertTrue((att / f).exists(), f)

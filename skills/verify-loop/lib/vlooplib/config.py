@@ -10,7 +10,7 @@ from . import paths, util
 
 MODES = ("off", "warn", "enforce")
 REPO_KEYS = ("enabled", "commands", "app", "auth", "floors", "ui_globs", "risky_globs", "ignore_globs",
-             "docs_globs", "config_globs", "test_globs", "notes", "cost_source")
+             "docs_globs", "config_globs", "test_globs", "notes", "cost_source", "specialists", "security_globs")
 USER_COMMENT = ("Gate mode: off | warn | enforce. Switch deliberately: review `vloop gate-report`, "
                 "then `vloop mode enforce`.")
 

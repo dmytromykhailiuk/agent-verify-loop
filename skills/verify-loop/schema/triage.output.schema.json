@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["change_size", "risk", "qa", "review", "confidence"],
+  "required": ["change_size", "risk", "qa", "review", "specialists", "confidence"],
   "properties": {
     "change_size": {"type": "string", "enum": ["small", "medium", "large"]},
     "risk": {"type": "string", "enum": ["low", "medium", "high"]},
@@ -22,6 +22,40 @@
         "tier": {"type": "string", "enum": ["standard", "deep"]},
         "reason": {"type": "string"},
         "focus": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "specialists": {
+      "type": "object", "additionalProperties": false,
+      "required": ["security", "perf", "ux"],
+      "properties": {
+        "security": {
+          "type": "object", "additionalProperties": false,
+          "required": ["run", "reason", "focus"],
+          "properties": {
+            "run": {"type": "boolean"},
+            "reason": {"type": "string"},
+            "focus": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "perf": {
+          "type": "object", "additionalProperties": false,
+          "required": ["run", "reason", "focus"],
+          "properties": {
+            "run": {"type": "boolean"},
+            "reason": {"type": "string"},
+            "focus": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "ux": {
+          "type": "object", "additionalProperties": false,
+          "required": ["run", "ui_spec", "reason", "focus"],
+          "properties": {
+            "run": {"type": "boolean"},
+            "ui_spec": {"type": "string", "enum": ["clear", "partial", "none", "n/a"]},
+            "reason": {"type": "string"},
+            "focus": {"type": "array", "items": {"type": "string"}}
+          }
+        }
       }
     },
     "confidence": {"type": "string", "enum": ["high", "medium", "low"]}

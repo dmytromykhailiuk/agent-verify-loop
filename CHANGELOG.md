@@ -1,6 +1,29 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-11-15
+
+- Smarter triage (sonnet/medium, up to 10 turns): picks the cheapest QA scope that still exercises the criteria,
+  raises only the review tier on low confidence, and gets new inputs: security-sensitive files (`security_globs`),
+  UI-spec hints, perf hints and a calibration line from the ledger (how often each QA scope, review tier and
+  specialist found something in the project's last runs). Its output gains `specialists`
+  (`security`/`perf`/`ux` with `run`, `reason`, `focus`, and `ui_spec` for UX); older triage results still load.
+- Specialist reviewers `verify-security`, `verify-perf`, `verify-ux` (read-only, same guard as the reviewer). Security
+  blocks only with evidence (category security/data, medium+ confidence, valid anchor, an input → sink → impact
+  scenario, an `evidence_ref` to the untrusted entry point, inside the diff); perf and UX are advisory and never fail
+  the loop. A reviewer finding that repeats a specialist finding is marked `duplicate_of` and does not block. The
+  reviewer skips the part of its checklist a running specialist covers.
+- Plan: precedence `begin --security|--perf|--ux on|off` > repo `specialists` (`auto|on|off`) > triage; UX on
+  triage's word needs UI files and a UI spec that is not clear. Overrides go to the plan notes; the plan records each
+  specialist's decision under `specialists`. Security uses `models.security.high_risk` (opus/medium) when triage
+  rates the risk high. Re-runs only turn specialists on: failed → recheck, passed → delta, or carried forward when the
+  delta touches nothing the specialist covers; first time on → full. A delta touching security files re-triages
+  when security did not run. Runs begun before this version keep reviewer + QA only.
+- `vloop spawn|spawn-wait|record|guard` accept `security`, `perf`, `ux`; standalone `--roles` accepts them too, and
+  a standalone reviewer brings the specialists along. Hooks, guard, integrity check, Herdr and headless transports
+  treat specialists like the reviewer.
+- Metrics: per-role tokens and cost for the specialists, `specialists_ran` and per-specialist `found` in ledger rows,
+  a specialists counter in `ledger --summary`, and new `triage_eval` notes (a specialist ran and found nothing; the
+  reviewer found a security or performance blocker while that specialist was off; UX forced on despite a clear spec).
 
 ## 0.2.0 — 2026-11-15
 

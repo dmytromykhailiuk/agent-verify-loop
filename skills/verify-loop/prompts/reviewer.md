@@ -24,6 +24,12 @@ The brief is the implementer's summary; when it conflicts with the user's reques
 
 {{focus}}
 
+<!-- if specialist_note -->
+## Specialist reviewers in this run
+
+{{specialist_note}}
+
+<!-- endif -->
 ## The change
 
 {{diff_summary}}

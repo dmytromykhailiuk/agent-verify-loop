@@ -25,9 +25,10 @@ MANIFESTS = ("package.json", "pyproject.toml", "setup.py", "setup.cfg", "Cargo.t
 
 
 def summarize(rows: list[dict], cfg: dict) -> dict:
-    m = {k: util.path_matcher(cfg.get(f"{k}_globs") or []) for k in ("docs", "test", "config", "ignore", "ui", "risky")}
+    m = {k: util.path_matcher(cfg.get(f"{k}_globs") or []) for k in ("docs", "test", "config", "ignore", "ui", "risky",
+                                                                     "security")}
     out = {"files": 0, "added": 0, "removed": 0, "changed_lines": 0, "rows": [],
-           "ui_files": [], "risky_files": [], "test_files": [], "config_files": [], "docs_files": [],
+           "ui_files": [], "risky_files": [], "security_files": [], "security_changed_lines": 0, "test_files": [], "config_files": [], "docs_files": [],
            "ignored_files": [], "new_files": [], "deleted_files": [], "renamed_files": [],
            "new_source_files": [], "source_files": [], "docs_only": False}
     for r in rows or []:
@@ -47,6 +48,8 @@ def summarize(rows: list[dict], cfg: dict) -> dict:
             flags.append("ui")
         if not is_ign and m["risky"](path):
             flags.append("risky")
+        if not is_ign and m["security"](path):
+            flags.append("security")
         if status == "A":
             flags.append("new")
         elif status == "D":
@@ -63,7 +66,10 @@ def summarize(rows: list[dict], cfg: dict) -> dict:
         if not is_ign and not binary:
             out["added"] += added
             out["removed"] += removed
-        for flag, key in (("ui", "ui_files"), ("risky", "risky_files"), ("test", "test_files"),
+        if "security" in flags and not (is_docs or is_test or binary):
+            out["security_changed_lines"] += added + removed
+        for flag, key in (("ui", "ui_files"), ("risky", "risky_files"), ("security", "security_files"),
+                          ("test", "test_files"),
                           ("config", "config_files"), ("docs", "docs_files"), ("ignored", "ignored_files"),
                           ("new", "new_files"), ("deleted", "deleted_files"), ("renamed", "renamed_files"),
                           ("source", "source_files")):
@@ -116,6 +122,11 @@ def material_delta(delta_summary: dict, first_summary: dict, prev_plan: dict, cf
     if delta_summary.get("risky_files") and prev_tier != "deep":
         reasons.append(f"delta touches risky files ({util.fmt_paths(delta_summary['risky_files'])}) "
                        f"and previous review tier was {prev_tier}")
+    sec = roles.get("security") or {}
+    sec_ran = sec.get("run") or sec.get("carried_from")
+    if delta_summary.get("security_files") and "specialists" in (prev_plan or {}) and not sec_ran:
+        reasons.append(f"delta touches security-sensitive files ({util.fmt_paths(delta_summary['security_files'])}) "
+                       f"and the security specialist did not run")
     if delta_summary.get("new_source_files"):
         reasons.append(f"delta adds source files ({util.fmt_paths(delta_summary['new_source_files'])})")
     threshold = max(float(md.get("min_lines", 80)),
@@ -126,7 +137,7 @@ def material_delta(delta_summary: dict, first_summary: dict, prev_plan: dict, cf
     if reasons:
         return True, "; ".join(reasons)
     return False, (f"delta {lines} lines in {int(delta_summary.get('files') or 0)} file(s), "
-                   f"no new UI/risky/source files")
+                   f"no new UI/risky/security/source files")
 
 
 # --------------------------------------------------------------------------- project facts (§2.14.5)

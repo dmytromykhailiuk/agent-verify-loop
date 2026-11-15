@@ -24,6 +24,7 @@ from .integrations import agentcost, vault
 from .transcripts import first_ts, iter_jsonl, module_for
 from .transcripts.claude import find_by_agent_name, find_session_transcript, usage_entries
 from .transcripts.claude import usage_numbers as _usage_numbers
+from .roles import AGENT, ALL_ROLES, SPECIALISTS
 
 LEDGER = "ledger.jsonl"
 HARNESS_PROJECT = "_harness"
@@ -32,9 +33,9 @@ LARGE_OUTPUT_CHARS = 20000
 CLOSED = ("passed", "accepted", "abandoned", "skipped", "reset", "done")
 SCOPES = ("none", "checks", "run", "browser")
 TIERS = ("standard", "deep")
-ROLE_BY_AGENT_TYPE = {"verify-reviewer": "reviewer", "verify-qa": "qa", "vault-keeper": "retro"}
+ROLE_BY_AGENT_TYPE = {**{a: r for r, a in AGENT.items()}, "vault-keeper": "retro"}
 VAULT_KEEPER = "vault-keeper"
-ROLES = ("triage", "reviewer", "qa", "retro", "other_subagents")
+ROLES = ("triage", *ALL_ROLES, "retro", "other_subagents")
 
 
 class CliError(Exception):
@@ -393,7 +394,7 @@ def collect_agents(ctx: dict, events: list[dict], main_path: Path | None, sid: s
         role = _role_of(sub.get("agent_type"))
         if role == "retro" and not _mentions_run(sub["path"], ctx.get("run_id", "")):
             role = "other_subagents"
-        ag = _agent_from_file(role, _attempt_for_ts(ctx, ft) if role in ("reviewer", "qa") else None, "agent",
+        ag = _agent_from_file(role, _attempt_for_ts(ctx, ft) if role in ALL_ROLES else None, "agent",
                               {"session_id": None}, sub["path"], tx)
         ag["agent_type"] = sub.get("agent_type")
         ag["agent_id"] = Path(sub["path"]).stem
@@ -650,6 +651,9 @@ def findings_history(rd: Path, ctx: dict) -> list[dict]:
                       for r, v in (j.get("roles") or {}).items() if isinstance(v, dict)},
             "blocking": [f"{f.get('id')}" for f in fs if f.get("blocking")],
             "blocking_by_role": dict(Counter(f.get("role") for f in fs if f.get("blocking"))),
+            "findings_by_role": dict(Counter(f.get("role") for f in fs)),
+            "reviewer_blocking_categories": dict(Counter(f.get("category") for f in fs
+                                                         if f.get("blocking") and f.get("role") == "reviewer")),
             "downgraded": [{"id": f.get("id"), "from": f.get("downgraded_from"), "reason": f.get("downgrade_reason")}
                            for f in fs if f.get("downgraded_from")],
             "stuck": [f.get("id") for f in fs if f.get("stuck")],
@@ -679,12 +683,17 @@ def change_info(rd: Path, ctx: dict) -> dict:
     first_att = (ctx.get("attempts") or [{}])[0] if ctx.get("attempts") else {}
     last = last or {}
     first_tri = first_tri or {}
+    ran = [s for s in SPECIALISTS if any(((p.get("roles") or {}).get(s) or {}).get("run") for p in plans)]
+    ux_forced = any(((p.get("specialists") or {}).get("ux") or {}).get("source") in ("user", "repo")
+                    and ((p.get("roles") or {}).get("ux") or {}).get("run") for p in plans)
+    ux_spec = (((first_tri.get("specialists") or {}).get("ux")) or {}).get("ui_spec")
     return {"files": last.get("files", 0), "added": last.get("added", 0), "removed": last.get("removed", 0),
             "prefilter": first_att.get("prefilter"), "change_size": first_tri.get("change_size"),
             "risk": first_tri.get("risk"), "confidence": first_tri.get("confidence"),
             "triage_source": first_tri.get("source"),
             "qa_scope": _max_ordered(qa_scopes, SCOPES) or ("none" if plans else None),
-            "review_tier": _max_ordered(tiers, TIERS)}
+            "review_tier": _max_ordered(tiers, TIERS), "specialists_ran": ran,
+            "ux_forced_clear_spec": bool(ux_forced and ux_spec == "clear")}
 
 
 def triage_eval(change: dict, history: list[dict], outcome: dict) -> dict:
@@ -704,9 +713,26 @@ def triage_eval(change: dict, history: list[dict], outcome: dict) -> dict:
         notes.append(f"triage said small, loop needed {outcome['attempts']} attempts")
     if scope == "browser" and unverified:
         notes.append(f"browser QA left {unverified} criteria unverified")
+    ran = list(change.get("specialists_ran") or [])
+    found_by = {s: any((h.get("findings_by_role") or {}).get(s) for h in history) for s in SPECIALISTS}
+    blocking_by = {s: any((h["blocking_by_role"].get(s) or 0) > 0 for h in history) for s in SPECIALISTS}
+    for s in ran:
+        if history and not found_by[s]:
+            notes.append(f"{s} specialist ran and found nothing")
+    rv_cats: Counter = Counter()
+    for h in history:
+        rv_cats.update(h.get("reviewer_blocking_categories") or {})
+    if rv_cats.get("security") and "security" not in ran:
+        notes.append("reviewer found a security blocker while the security specialist was off")
+    if rv_cats.get("performance") and "perf" not in ran:
+        notes.append("reviewer found a performance blocker while the perf specialist was off")
+    if change.get("ux_forced_clear_spec"):
+        notes.append("UX specialist forced on despite a clear UI spec")
     return {"source": change.get("triage_source"), "change_size": change.get("change_size"),
             "risk": change.get("risk"), "confidence": change.get("confidence"), "qa_scope": scope,
             "review_tier": tier, "qa_found_blocking": qa_blocking, "reviewer_found_blocking": rev_blocking,
+            "specialists_ran": ran, "specialists_found": {s: found_by[s] for s in ran},
+            "security_found_blocking": blocking_by["security"],
             "unverified": unverified, "mismatches": notes}
 
 
@@ -727,7 +753,8 @@ def ledger_summary(rows: list[dict], project: str | None = None, last: int = 20)
     rows = rows[-last:]
     out: dict = {"project": project, "rows": len(rows), "by_change_size": {},
                  "qa_scope": dict(Counter(r.get("qa_scope") or "none" for r in rows)),
-                 "cost_source": dict(Counter(r.get("cost_source") or "own" for r in rows))}
+                 "cost_source": dict(Counter(r.get("cost_source") or "own" for r in rows)),
+                 "specialists": dict(Counter(s for r in rows for s in r.get("specialists_ran") or []))}
     groups: dict[str, list] = {}
     for r in rows:
         groups.setdefault(r.get("change_size") or "unknown", []).append(r)
@@ -743,6 +770,55 @@ def ledger_summary(rows: list[dict], project: str | None = None, last: int = 20)
             "attempts": _median([r.get("attempts") for r in rs]),
         }
     return out
+
+
+def _row_found(row: dict) -> dict | None:
+    found = row.get("found")
+    if isinstance(found, dict):
+        return found
+    m = util.read_json(_runs_dir() / str(row.get("run_id") or "") / "retro" / "metrics.json")
+    te = m.get("triage_eval") if isinstance(m, dict) else None
+    if not isinstance(te, dict):
+        return None
+    return {"qa": bool(te.get("qa_found_blocking")), "reviewer": bool(te.get("reviewer_found_blocking"))}
+
+
+def triage_calibration(project: str | None, last: int = 30, rows: list[dict] | None = None) -> str:
+    """How often each QA scope / review tier found a blocking issue in this project's last runs (triage input)."""
+    rows = [r for r in (read_ledger() if rows is None else rows)
+            if r.get("project") == project and r.get("kind", "loop") == "loop"][-last:]
+    if not rows:
+        return "(no past runs for this project)"
+    qa: dict[str, list[int]] = {}
+    rv: dict[str, list[int]] = {}
+    spec: dict[str, list[int]] = {}
+    known = 0
+    for r in rows:
+        found = _row_found(r)
+        if found is None:
+            continue
+        known += 1
+        q = qa.setdefault(r.get("qa_scope") or "none", [0, 0])
+        q[0] += bool(found.get("qa"))
+        q[1] += 1
+        v = rv.setdefault(r.get("review_tier") or "standard", [0, 0])
+        v[0] += bool(found.get("reviewer"))
+        v[1] += 1
+        for sp in r.get("specialists_ran") or []:
+            c = spec.setdefault(sp, [0, 0])
+            c[0] += bool(found.get(sp))
+            c[1] += 1
+    if not known:
+        return f"last {len(rows)} runs: no findings data recorded"
+    qa_txt = ", ".join(f"{s} {qa[s][0]}/{qa[s][1]}" for s in SCOPES if s in qa and s != "none")
+    rv_txt = ", ".join(f"{s} {rv[s][0]}/{rv[s][1]}" for s in TIERS if s in rv)
+    lines = [f"last {len(rows)} runs ({known} with findings data); blocking issues found / runs:",
+             f"- QA: {qa_txt or 'never ran'}" + (f" (QA skipped in {qa['none'][1]})" if "none" in qa else ""),
+             f"- review: {rv_txt}"]
+    if spec:
+        lines.append("- specialists (any finding / runs): "
+                     + ", ".join(f"{k} {spec[k][0]}/{spec[k][1]}" for k in SPECIALISTS if k in spec))
+    return "\n".join(lines)
 
 
 def append_ledger(row: dict) -> bool:
@@ -772,18 +848,21 @@ def ledger_row(m: dict, ctx: dict, policy: str) -> dict:
         if key in ("implement", "verify", "fix"):
             mins[key] = round(mins[key] + ph["wall_min"], 1)
     ch, oc = m["change"], m["outcome"]
+    te = m.get("triage_eval") or {}
+    spec_found = te.get("specialists_found") or {}
     return {"ts": util.now_iso(), "run_id": m["run_id"], "session_id": m["session_id"], "project": m["project"],
             "repo_key": (ctx.get("repo") or {}).get("key"), "kind": ctx.get("kind", "loop"),
             "outcome": oc["status"], "attempts": oc["attempts"], "failed_attempts": oc["failed_attempts"],
             "files": ch.get("files", 0), "added": ch.get("added", 0), "removed": ch.get("removed", 0),
             "prefilter": ch.get("prefilter"), "change_size": ch.get("change_size"), "risk": ch.get("risk"),
             "qa_scope": ch.get("qa_scope"), "review_tier": ch.get("review_tier"),
-            "tokens": {"main": m["tokens"]["main"]["total"], "triage": by_role["triage"],
-                       "reviewer": by_role["reviewer"], "qa": by_role["qa"], "retro": by_role["retro"]},
+            "specialists_ran": list(ch.get("specialists_ran") or []),
+            "found": {"qa": bool(te.get("qa_found_blocking")), "reviewer": bool(te.get("reviewer_found_blocking")),
+                      **{s: bool(spec_found.get(s)) for s in ch.get("specialists_ran") or []}},
+            "tokens": {"main": m["tokens"]["main"]["total"],
+                       **{r: by_role.get(r, 0) for r in ("triage", *ALL_ROLES, "retro")}},
             "cost_usd": {"main": _rounded(m["tokens"]["main"]["cost_usd"], 4),
-                         "triage": _rounded(cost_role["triage"], 4),
-                         "reviewer": _rounded(cost_role["reviewer"], 4), "qa": _rounded(cost_role["qa"], 4),
-                         "retro": _rounded(cost_role["retro"], 4),
+                         **{r: _rounded(cost_role.get(r, 0.0), 4) for r in ("triage", *ALL_ROLES, "retro")},
                          "total": _rounded(m["tokens"]["cost_usd"], 4)},
             "cost_source": (m.get("cost_provider") or {}).get("source", "own"),
             "platform": m.get("platform"),
@@ -1030,7 +1109,7 @@ def compute_metrics(run_id: str, *, now: str | None = None) -> dict:
         k = ph["name"].split("#")
         agent_tok = 0
         for a in agents:
-            if a["role"] in ("triage", "reviewer", "qa") and a["attempt"] is not None:
+            if a["role"] in ("triage", *ALL_ROLES) and a["attempt"] is not None:
                 hit = k[0] == "verify" and len(k) > 1 and str(a["attempt"]) == k[1]
             else:
                 ft = a.get("first_ts")
@@ -1067,7 +1146,7 @@ def compute_metrics(run_id: str, *, now: str | None = None) -> dict:
                    "trimmed_min": _gap_trimmed_minutes(timeline, start, closed_at or end)},
         "outcome": outcome,
         "change": {k: change[k] for k in ("files", "added", "removed", "prefilter", "change_size", "risk",
-                                           "qa_scope", "review_tier")},
+                                           "qa_scope", "review_tier", "specialists_ran")},
         "tokens": {"main": main, "agents": [{k: a.get(k) for k in AGENT_KEYS} for a in agents],
                    "by_role": by_role, "cost_by_role": {k: _rounded(v) for k, v in cost_by_role.items()},
                    "total": total_tokens,

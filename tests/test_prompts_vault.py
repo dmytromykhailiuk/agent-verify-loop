@@ -123,14 +123,14 @@ class TestWording(HermeticCase):
         self.assertRegex(t, r"(?m)^ops: \{\{vault_ops_retro\}\}$")
 
     def test_no_claude_code_only_instructions(self):
-        for name in ("retro", "reviewer", "qa", "triage"):
+        for name in ("retro", "reviewer", "specialist", "qa", "triage"):
             t = self.text(name)
             self.assertNotIn("Claude Code session", t, name)
             self.assertNotRegex(t, r"with the Write tool", name)
             self.assertNotIn("Agent tool", t, name)
 
     def test_writing_tool_named_per_agent(self):
-        for name in ("reviewer", "qa"):
+        for name in ("reviewer", "specialist", "qa"):
             self.assertIn("Write in Claude Code, apply_patch in Codex", self.text(name))
 
     def test_placeholders_in_retro_are_all_supplied_by_render_task(self):
@@ -138,6 +138,99 @@ class TestWording(HermeticCase):
         self.assertEqual(used, {"run_id", "platform", "vault_ops_retro", "vloop", "vault_cli", "session_id",
                                 "repo_root", "project_slug", "harness_project", "policy", "metrics_path",
                                 "digest_path", "judge_paths"})
+
+
+
+PREV_JUDGE = {"findings": [
+    {"role": "reviewer", "id": "R1", "severity": "major", "category": "correctness", "blocking": True,
+     "file": "src/a.py", "line": 3, "title": "reviewer thing"},
+    {"role": "qa", "id": "Q1", "severity": "blocker", "category": "acceptance", "blocking": True,
+     "check_id": "C1", "title": "qa thing"},
+    {"role": "security", "id": "SC1", "severity": "major", "category": "security", "blocking": True,
+     "file": "src/a.py", "line": 4, "title": "security thing"},
+    {"role": "perf", "id": "PF1", "severity": "minor", "category": "performance", "blocking": False,
+     "file": "src/a.py", "line": 5, "title": "perf thing"},
+]}
+
+
+class TestSpecialistTasks(RenderCase):
+    def setUp(self):
+        super().setUp()
+        for role in ("security", "perf", "ux"):
+            self.plan["roles"][role] = {"mode": "full", "tier": "standard", "model": "sonnet", "timeout_s": 900}
+        (self.att / "triage.json").write_text(json.dumps({"specialists": {
+            "security": {"run": True, "reason": "touches the auth middleware", "focus": ["token refresh"]},
+            "perf": {"run": True, "reason": "", "focus": []},
+            "ux": {"run": True, "ui_spec": "partial", "reason": "new form", "focus": ["error state"]}}}))
+
+    def test_specialist_task_files(self):
+        for role, fp, sp in (("security", "SC", "SCS"), ("perf", "PF", "PFS"), ("ux", "UX", "UXS")):
+            out = prompts.render_role(role, run_dir=self.run_dir, ctx=self.ctx, attempt=1, plan=self.plan, cfg={},
+                                      project={})
+            self.assertEqual(out.name, f"{role}.prompt.md")
+            text = out.read_text()
+            self.assertNotIn("{{", text, role)
+            self.assertNotIn("<!--", text, role)
+            self.assertTrue(text.startswith(f"# {role} review · run r1 · attempt 1"), role)
+            self.assertIn(f'"role": "{role}"', text)
+            self.assertIn(f"`{fp}1`", text)
+            self.assertIn(f"`{sp}1`", text)
+            self.assertIn(prompts.CHARTERS[role], text)
+            self.assertIn(str(self.att / f"{role}.json"), text)
+            if role == "security":
+                self.assertIn("- token refresh", text)
+                self.assertIn("Why triage turned you on: touches the auth middleware", text)
+                self.assertIn("security evidence rules", text)
+            else:
+                self.assertIn("never block", text)
+            if role == "ux":
+                self.assertIn("UI spec in the request or brief (triage): partial.", text)
+                self.assertIn("- error state", text)
+
+    def test_specialist_without_triage_entry(self):
+        (self.att / "triage.json").unlink()
+        text = self.render("perf")
+        self.assertIn(prompts.CHARTERS["perf"], text)
+        self.assertNotIn("Why triage turned you on", text)
+
+    def test_reviewer_specialist_note(self):
+        text = self.render("reviewer")
+        self.assertNotIn("Specialist reviewers in this run", text)
+        out = prompts.render_role("reviewer", run_dir=self.run_dir, ctx=self.ctx, attempt=1, plan=self.plan, cfg={},
+                                  project={}, specialists=["ux", "security"])
+        text = out.read_text()
+        self.assertIn("## Specialist reviewers in this run", text)
+        self.assertIn("Skip §3.5 (Security)", text)
+        self.assertIn("A UX specialist reviews", text)
+        self.assertNotIn("§3.7", text)
+        self.assertLess(text.index("Skip §3.5"), text.index("A UX specialist"))
+        self.assertEqual(prompts.specialist_note([]), "")
+        self.assertIn("Skip §3.7 (Performance traps)", prompts.specialist_note(["perf"]))
+
+    def test_previous_findings_filtered_by_role(self):
+        def ids(text):
+            return [ln.split()[1] for ln in text.splitlines() if ln.startswith("- ")]
+
+        self.assertEqual(ids(prompts.previous_findings(PREV_JUDGE)), ["R1", "Q1", "SC1", "PF1"])
+        self.assertEqual(ids(prompts.previous_findings(PREV_JUDGE, "reviewer")), ["R1", "Q1"])
+        self.assertEqual(ids(prompts.previous_findings(PREV_JUDGE, "qa")), ["R1", "Q1"])
+        self.assertEqual(ids(prompts.previous_findings(PREV_JUDGE, "security")), ["SC1"])
+        self.assertEqual(ids(prompts.previous_findings(PREV_JUDGE, "ux")), [])
+
+    def test_rerun_task_gets_own_previous_findings(self):
+        att2 = self.run_dir / "attempt-2"
+        att2.mkdir()
+        (att2 / "diff.numstat.json").write_text((self.att / "diff.numstat.json").read_text())
+        (self.att / "judge.json").write_text(json.dumps(PREV_JUDGE))
+        out = prompts.render_role("security", run_dir=self.run_dir, ctx=self.ctx, attempt=2, plan=self.plan, cfg={},
+                                  project={})
+        text = out.read_text()
+        self.assertIn("SC1 [major·security·blocking]", text)
+        self.assertNotIn("R1 [", text)
+        text = prompts.render_role("reviewer", run_dir=self.run_dir, ctx=self.ctx, attempt=2, plan=self.plan,
+                                   cfg={}, project={}).read_text()
+        self.assertIn("R1 [", text)
+        self.assertNotIn("SC1 [", text)
 
 
 if __name__ == "__main__":

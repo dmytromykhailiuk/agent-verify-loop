@@ -4,5 +4,6 @@
   "qa": {"scope": "browser", "reason": "UI template changed (page.html); flow reachable at /scan",
          "focus": ["step 3 Next button"], "needs_login": false},
   "review": {"tier": "standard", "reason": "service + template; no auth/data paths", "focus": ["retry counter reset"]},
+  "specialists": {"security": {"run": false, "reason": "no security-sensitive change", "focus": []}, "perf": {"run": false, "reason": "no hot path changed", "focus": []}, "ux": {"run": false, "ui_spec": "partial", "reason": "browser QA checks the visible change", "focus": []}},
   "confidence": "high"
 }

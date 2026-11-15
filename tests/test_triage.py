@@ -61,10 +61,10 @@ class TriageCallTest(h.Case):
         self.assertEqual(len(calls), 1)
         schema = json.dumps(verdict.load_schema("triage-output"), separators=(",", ":"))
         self.assertEqual(calls[0]["argv"], [
-            "-p", "--agent", "verify-triage", "--model", "haiku", "--effort", "low", "--output-format", "json",
+            "-p", "--agent", "verify-triage", "--model", "sonnet", "--effort", "medium", "--output-format", "json",
             "--json-schema", schema, "--tools", "Read,Grep,Glob,StructuredOutput", "--strict-mcp-config",
             "--settings", '{"disableAllHooks":true}', "--permission-mode", "default", "--permission-prompts", "none",
-            "--no-session-persistence", "--max-budget-usd", "0.15",
+            "--no-session-persistence", "--max-budget-usd", "0.6",
             "Triage the change described on stdin. Answer only with the JSON object."])
         self.assertEqual(calls[0]["env_mode"], "off")
         self.assertIsNone(calls[0]["herdr_env"])

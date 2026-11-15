@@ -5,6 +5,7 @@ import copy
 from pathlib import Path
 
 from . import state, util
+from .roles import ADVISORY_ROLES, ALL_ROLES, SPECIALISTS
 
 SCOPES = ("none", "checks", "run", "browser")
 TIERS = ("standard", "deep")
@@ -42,6 +43,25 @@ def _risk(summary: dict) -> str:
     return "medium" if summary.get("source_files") or summary.get("config_files") else "low"
 
 
+SECURITY_FALLBACK_MIN_LINES = 10
+
+
+def specialists_off(reason: str) -> dict:
+    return {"security": {"run": False, "reason": reason, "focus": []},
+            "perf": {"run": False, "reason": reason, "focus": []},
+            "ux": {"run": False, "ui_spec": "n/a", "reason": reason, "focus": []}}
+
+
+def _fallback_specialists(summary: dict, prefix: str) -> dict:
+    spec = specialists_off(prefix + "not chosen by the fallback rules")
+    sec, lines = summary.get("security_files") or [], int(summary.get("security_changed_lines") or 0)
+    if sec and lines >= SECURITY_FALLBACK_MIN_LINES:
+        spec["security"] = {"run": True, "focus": list(sec[:5]),
+                            "reason": prefix + f"security-sensitive files changed ({util.fmt_paths(sec)}, "
+                                               f"{lines} lines)"}
+    return spec
+
+
 def fallback_triage(summary: dict, cfg: dict, project: dict, prefix: str) -> dict:
     """§2.9.2 fallback rules, shaped like a stored triage result (source fallback)."""
     if summary.get("risky_files"):
@@ -60,14 +80,15 @@ def fallback_triage(summary: dict, cfg: dict, project: dict, prefix: str) -> dic
     return {"schema": 1, "role": "triage", "source": "fallback", "change_size": change_size(summary),
             "risk": _risk(summary),
             "qa": {"scope": scope, "reason": prefix + qr, "focus": [], "needs_login": needs_login},
-            "review": {"tier": tier, "reason": prefix + rr, "focus": []}, "confidence": "low", "agent": None}
+            "review": {"tier": tier, "reason": prefix + rr, "focus": []},
+            "specialists": _fallback_specialists(summary, prefix), "confidence": "low", "agent": None}
 
 
 def _trivial_triage(reason: str) -> dict:
     return {"schema": 1, "role": "triage", "source": "prefilter", "change_size": "small", "risk": "low",
             "qa": {"scope": "none", "reason": f"{reason} (prefilter, no triage)", "focus": [], "needs_login": False},
-            "review": {"tier": "standard", "reason": f"{reason} (prefilter)", "focus": []}, "confidence": "high",
-            "agent": None}
+            "review": {"tier": "standard", "reason": f"{reason} (prefilter)", "focus": []},
+            "specialists": specialists_off(f"{reason} (prefilter)"), "confidence": "high", "agent": None}
 
 
 def _user_triage(summary: dict, qa: str, review: str) -> dict:
@@ -75,7 +96,7 @@ def _user_triage(summary: dict, qa: str, review: str) -> dict:
             "risk": _risk(summary),
             "qa": {"scope": qa, "reason": f"--qa {qa} (user flag)", "focus": [], "needs_login": False},
             "review": {"tier": review, "reason": f"--review {review} (user flag)", "focus": []},
-            "confidence": "high", "agent": None}
+            "specialists": specialists_off("user flags (no triage)"), "confidence": "high", "agent": None}
 
 
 def _store_triage(run_dir: Path, ctx: dict, n: int, tri: dict) -> dict:
@@ -96,11 +117,24 @@ def _run_triage(run_dir, ctx, n, cfg, summary, project, **kw) -> dict:
 # --------------------------------------------------------------------------- draft → plan
 
 
+def _draft_spec(tri: dict) -> dict:
+    raw = tri.get("specialists") if isinstance(tri.get("specialists"), dict) else {}
+    out = {}
+    for s in SPECIALISTS:
+        o = raw.get(s) if isinstance(raw.get(s), dict) else {}
+        out[s] = {"run": o.get("run") is True, "reason": o.get("reason") or "", "focus": list(o.get("focus") or []),
+                  "source": "triage"}
+        if s == "ux":
+            out[s]["ui_spec"] = o.get("ui_spec") or "n/a"
+    return out
+
+
 def _draft(tri: dict) -> dict:
     qa, rv = tri.get("qa") or {}, tri.get("review") or {}
     return {"tier": rv.get("tier") or "standard", "review_reason": rv.get("reason") or "",
             "scope": qa.get("scope") or "none", "qa_reason": qa.get("reason") or "",
-            "qa_focus": list(qa.get("focus") or []), "needs_login": bool(qa.get("needs_login")), "skipped_by": None}
+            "qa_focus": list(qa.get("focus") or []), "needs_login": bool(qa.get("needs_login")), "skipped_by": None,
+            "spec": _draft_spec(tri)}
 
 
 def _floors_flags(d: dict, cfg: dict, flags: dict, transport: str, notes: list[str]) -> None:
@@ -127,6 +161,50 @@ def _floors_flags(d: dict, cfg: dict, flags: dict, transport: str, notes: list[s
         notes.append("browser unavailable on the Agent-tool transport")
 
 
+def _setting(cfg: dict, flags: dict, s: str) -> tuple[str, str, str]:
+    """(auto | on | off, source, reason). Precedence: user flag > repo `specialists` > triage."""
+    if flags.get(s) in ("on", "off"):
+        return flags[s], "user", f"--{s} {flags[s]} (user flag)"
+    repo = (cfg.get("specialists") or {}).get(s)
+    if repo in ("on", "off"):
+        return repo, "repo", f"repo specialists.{s}={repo}"
+    return "auto", "triage", ""
+
+
+def _specialists(d: dict, cfg: dict, flags: dict, summary: dict, notes: list[str],
+                 keep_on: dict | None = None) -> None:
+    """Final run/off per specialist in d["spec"]. `keep_on`: specialist → focus for those an earlier attempt ran
+    (re-runs only ratchet them on). UX on triage's word needs UI files and a UI spec that is not clear."""
+    keep_on = keep_on or {}
+    for s in SPECIALISTS:
+        sp = d["spec"][s]
+        setting, source, why = _setting(cfg, flags, s)
+        tri_run = sp["run"]
+        if setting == "on":
+            if not tri_run:
+                notes.append(f"{s} on: {why} (triage: off)")
+            sp.update(run=True, reason=f"{why}; triage: {sp['reason']}" if tri_run and sp["reason"] else why,
+                      source=source)
+            continue
+        if setting == "off":
+            if tri_run or s in keep_on:
+                notes.append(f"{s} off: {why} (triage: on)" if tri_run else f"{s} off: {why}")
+            sp.update(run=False, reason=why, source=source)
+            continue
+        if s in keep_on:
+            if not tri_run:
+                sp.update(run=True, reason="ran in an earlier attempt (specialists only turn on in re-runs)",
+                          source="earlier", focus=sp["focus"] or list(keep_on[s]))
+            continue
+        if s == "ux" and tri_run:
+            if not summary.get("ui_files"):
+                notes.append("ux off: no UI files changed (triage: on)")
+                sp.update(run=False, reason="no UI files changed")
+            elif sp.get("ui_spec") == "clear":
+                notes.append("ux off: the request gives a clear UI spec (triage: on)")
+                sp.update(run=False, reason="clear UI spec in the request")
+
+
 def _roles(ctx: dict, d: dict, cfg: dict, source: str) -> dict:
     t = cfg.get("timeouts_s") or {}
     roles = {}
@@ -141,7 +219,20 @@ def _roles(ctx: dict, d: dict, cfg: dict, source: str) -> dict:
         if d["scope"] == "none":
             qa["skipped_by"] = d["skipped_by"] or SKIPPED_BY.get(source, "triage")
         roles["qa"] = qa
+    for s in SPECIALISTS:
+        sp = (d.get("spec") or {}).get(s) or {}
+        if s in ctx.get("roles", []) and sp.get("run"):
+            roles[s] = {"run": True, "mode": "full", "tier": "standard", "model": None, "effort": None,
+                        "reason": sp.get("reason") or "", "timeout_s": int(t.get(s, 1200)), "carried_from": None,
+                        "focus": list(sp.get("focus") or [])[:5], "source": sp.get("source") or "triage"}
     return roles
+
+
+def _spec_record(ctx: dict, d: dict) -> dict | None:
+    if not any(s in (ctx.get("roles") or []) for s in SPECIALISTS):
+        return None
+    return {s: {"run": bool(d["spec"][s]["run"]), "reason": d["spec"][s].get("reason") or "",
+                "source": d["spec"][s].get("source") or "triage"} for s in SPECIALISTS}
 
 
 def _skip_qa(qa: dict, reason: str) -> None:
@@ -172,6 +263,22 @@ def finalize(plan: dict, cfg: dict, tri: dict, repo_root: str, *, model_override
             rv["model"], rv["effort"] = model_override or m, e
         else:
             rv["model"] = rv["effort"] = None
+    for s in SPECIALISTS:
+        sr = plan["roles"].get(s)
+        if not sr:
+            continue
+        if sr.get("run"):
+            ms = models.get(s) or {}
+            if sr.get("mode") == "delta":
+                key = "delta"
+            elif s == "security" and tri.get("risk") == "high" and ms.get("high_risk"):
+                key = "high_risk"
+            else:
+                key = "standard"
+            sr["tier"] = "high_risk" if key == "high_risk" else "standard"
+            sr["model"], sr["effort"] = ms.get(key) or ms.get("standard") or ["sonnet", "medium"]
+        else:
+            sr["model"] = sr["effort"] = None
     qa = plan["roles"].get("qa")
     auth = None
     if qa:
@@ -253,13 +360,19 @@ def save(run_dir: Path, ctx: dict, plan: dict) -> None:
         state.append_event(ctx["session_id"], "plan", repo=ctx["repo"]["key"], run=ctx["run_id"], attempt=n,
                            reviewer={k: rv.get(k) for k in ("run", "mode", "tier", "model", "effort")} if rv else None,
                            qa={k: qa.get(k) for k in ("run", "mode", "scope", "model", "effort")} if qa else None,
+                           specialists={s: {k: plan["roles"][s].get(k) for k in ("run", "mode", "model", "effort")}
+                                        for s in SPECIALISTS if s in plan["roles"]},
                            notes=plan.get("notes") or [])
 
 
-def _new_plan(ctx: dict, n: int, source: str, roles: dict, notes: list[str]) -> dict:
-    return {"schema": 1, "run_id": ctx["run_id"], "attempt": n, "source": source,
+def _new_plan(ctx: dict, n: int, source: str, roles: dict, notes: list[str], d: dict | None = None) -> dict:
+    plan = {"schema": 1, "run_id": ctx["run_id"], "attempt": n, "source": source,
             "triage_path": f"attempt-{n}/triage.json", "roles": roles, "notes": notes,
             "transport": ctx.get("transport") or "agent"}
+    spec = _spec_record(ctx, d) if d else None
+    if spec:
+        plan["specialists"] = spec
+    return plan
 
 
 # --------------------------------------------------------------------------- builders
@@ -281,7 +394,8 @@ def build_initial(run_dir: Path, ctx: dict, n: int, cfg: dict, summary: dict, pr
         source = "triage" if tri.get("source") == "triage" else "fallback"
     d = _draft(tri)
     _floors_flags(d, cfg, flags, ctx.get("transport") or "agent", notes)
-    plan = _new_plan(ctx, n, source, _roles(ctx, d, cfg, source), notes)
+    _specialists(d, cfg, flags, summary, notes)
+    plan = _new_plan(ctx, n, source, _roles(ctx, d, cfg, source), notes, d)
     apply_consent(ctx, plan, cfg)
     auth = finalize(plan, cfg, tri, ctx["repo"]["root"])
     save(run_dir, ctx, plan)
@@ -322,7 +436,12 @@ def build_standalone(run_dir: Path, ctx: dict, cfg: dict, summary: dict, project
         d["qa_reason"] = f"standalone QA floor checks (triage: {d['scope']} — {d['qa_reason']})"
         d["scope"] = "checks"
     _floors_flags(d, cfg, {}, ctx.get("transport") or "agent", notes)
-    plan = _new_plan(ctx, n, "standalone", _roles(ctx, d, cfg, "standalone"), notes)
+    sflags = dict(ctx.get("flags") or {})
+    for s in (ctx.get("standalone") or {}).get("roles") or []:
+        if s in SPECIALISTS and sflags.get(s) not in ("on", "off"):
+            sflags[s] = "on"
+    _specialists(d, cfg, sflags, summary, notes)
+    plan = _new_plan(ctx, n, "standalone", _roles(ctx, d, cfg, "standalone"), notes, d)
     apply_consent(ctx, plan, cfg, explicit=qa_flag == "browser" or bool(url))
     auth = finalize(plan, cfg, tri, ctx["repo"]["root"], model_override=model)
     save(run_dir, ctx, plan)
@@ -335,6 +454,19 @@ def _earlier_findings(run_dir: Path, role: str, n: int) -> bool:
         if any(f.get("role") == role for f in j.get("findings") or []):
             return True
     return False
+
+
+def _relevant(role: str, delta: dict, delta_code: bool, prev: dict) -> bool:
+    """Does the delta touch anything a passed role should look at again? If not, its verdict is carried forward."""
+    if role == "security":
+        focus = " ".join(str(f) for f in prev.get("focus") or [])
+        paths = [r.get("path") for r in delta.get("rows") or [] if r.get("path")]
+        return bool(delta.get("security_files")) or any(p in focus for p in paths)
+    if role == "perf":
+        return bool(delta.get("source_files"))
+    if role == "ux":
+        return bool(delta.get("ui_files"))
+    return delta_code
 
 
 def build_rerun(run_dir: Path, ctx: dict, n: int, cfg: dict, delta: dict, project: dict) -> tuple[dict, dict | None]:
@@ -358,6 +490,8 @@ def build_rerun(run_dir: Path, ctx: dict, n: int, cfg: dict, delta: dict, projec
                             "focus": (prev_roles.get("qa") or {}).get("focus") or [],
                             "needs_login": (prev_roles.get("qa") or {}).get("needs_login")},
                      "review": {"tier": prev_tier, "reason": (prev_roles.get("reviewer") or {}).get("reason")}})
+    prev_on = {s: list(prev_roles[s].get("focus") or []) for s in SPECIALISTS if isinstance(prev_roles.get(s), dict)
+               and (prev_roles[s].get("run") or prev_roles[s].get("carried_from") is not None)}
     if flags.get("qa") in SCOPES and flags.get("review") in TIERS:
         tri = _store_triage(run_dir, ctx, n, _user_triage(summary, flags["qa"], flags["review"]))
         source, d = "user", _draft(tri)
@@ -383,6 +517,7 @@ def build_rerun(run_dir: Path, ctx: dict, n: int, cfg: dict, delta: dict, projec
         source, d = "reused", prev_d
         notes.append(f"triage reused: {mreason}")
     _floors_flags(d, cfg, flags, ctx.get("transport") or "agent", notes)
+    _specialists(d, cfg, flags, summary, notes, keep_on=prev_on)
     roles = _roles(ctx, d, cfg, source)
     prev_states = {r: (info or {}).get("state") for r, info in (prev_judge.get("roles") or {}).items()}
     delta_code = any("docs" not in (r.get("flags") or []) for r in delta.get("rows") or [])
@@ -405,7 +540,7 @@ def build_rerun(run_dir: Path, ctx: dict, n: int, cfg: dict, delta: dict, projec
         if prev == "fail":
             pr["mode"] = "recheck"
         elif prev == "pass":
-            if delta_code:
+            if _relevant(role, delta, delta_code, prev_roles.get(role) or {}):
                 pr["mode"] = "delta"
             else:
                 pp = prev_roles.get(role) or {}
@@ -413,7 +548,7 @@ def build_rerun(run_dir: Path, ctx: dict, n: int, cfg: dict, delta: dict, projec
                 pr.update({"run": False, "carried_from": int(k), "mode": pp.get("mode") or "full"})
         else:
             pr["mode"] = "recheck" if _earlier_findings(run_dir, role, n) else "full"
-    plan = _new_plan(ctx, n, source, roles, notes)
+    plan = _new_plan(ctx, n, source, roles, notes, d)
     apply_consent(ctx, plan, cfg, rule1=rule1)
     auth = finalize(plan, cfg, tri, ctx["repo"]["root"])
     save(run_dir, ctx, plan)
@@ -431,7 +566,7 @@ def header(tri: dict, cfg: dict) -> str:
     if src == "triage":
         from . import platforms
 
-        alias = (cfg.get("triage") or {}).get("model") or "haiku"
+        alias = (cfg.get("triage") or {}).get("model") or "sonnet"
         if platforms.detect().name == "codex":
             alias = ag.get("model") or "codex"
         return (f"triage {alias} ({util.short_dur(ag.get('duration_s') or 0)}, {metrics.money(ag.get('cost_usd'))}, "
@@ -455,6 +590,15 @@ def role_lines(plan: dict) -> list[str]:
             out.append(f"  review: carried from #{rv['carried_from']} (PASS)")
         else:
             out.append(f"  review: none — {rv.get('reason')}")
+    for s in SPECIALISTS:
+        sr = (plan.get("roles") or {}).get(s)
+        if not sr:
+            continue
+        adv = " (advisory)" if s in ADVISORY_ROLES else ""
+        if sr.get("run"):
+            out.append(f"  {s}{adv}: {sr['mode']} · {sr['model']}/{sr['effort']} — {sr.get('reason')}")
+        elif sr.get("carried_from"):
+            out.append(f"  {s}{adv}: carried from #{sr['carried_from']} (PASS)")
     qa = (plan.get("roles") or {}).get("qa")
     if qa:
         if qa.get("run"):
@@ -474,7 +618,7 @@ def next_lines(run_dir: Path, ctx: dict, plan: dict, cfg: dict | None = None) ->
 
     run_id = ctx["run_id"]
     n = plan["attempt"]
-    roles = [r for r in ("reviewer", "qa") if ((plan.get("roles") or {}).get(r) or {}).get("run")]
+    roles = [r for r in ALL_ROLES if ((plan.get("roles") or {}).get(r) or {}).get("run")]
     if not roles:
         return [f"next: {_vl()} judge --run {run_id}"]
     cfg = cfg if cfg is not None else config.load(ctx["repo"]["root"])

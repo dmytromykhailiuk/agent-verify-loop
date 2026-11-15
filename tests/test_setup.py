@@ -23,7 +23,7 @@ try:
 except ImportError:
     tomllib = None
 
-AGENT_NAMES = ("verify-qa", "verify-reviewer", "verify-triage")
+AGENT_NAMES = ("verify-perf", "verify-qa", "verify-reviewer", "verify-security", "verify-triage", "verify-ux")
 EVENT_KEYS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStart",
               "SubagentStop")
 
@@ -599,7 +599,7 @@ class DoctorTest(SetupCase):
         self.assertIn("gate mode: warn", out)
         self.assertIn("Transport:", out)
         self.assertIn("agent-vault:", out)
-        self.assertIn("user 0/3", out)
+        self.assertIn("user 0/6", out)
         self.assertNotIn("warning", out)
 
     def test_agent_cost_detection(self):
@@ -625,7 +625,7 @@ class DoctorTest(SetupCase):
     def test_after_setup_counts(self):
         self.ok("setup", "--agent", "all")
         out = self.doctor()
-        self.assertIn("user 3/3", out)
+        self.assertIn("user 6/6", out)
         self.assertIn("user 7/7", out)
         self.assertNotIn("warning", out)
 
@@ -635,14 +635,14 @@ class DoctorTest(SetupCase):
         self.assertEqual(report["problems"], [])
         self.assertEqual(report["config"]["gate_mode"], "enforce")
         claude = report["installed"]["claude"]
-        self.assertEqual(claude["agents"]["user"], {"present": 3, "total": 3})
+        self.assertEqual(claude["agents"]["user"], {"present": 6, "total": 6})
         self.assertEqual(claude["hooks"]["user"]["present"], 7)
         self.assertEqual(report["installed"]["codex"]["hooks"]["user"]["present"], 0)
 
     def test_project_scope_is_listed_inside_a_repo(self):
         self.ok("setup", "--agent", "claude", "--scope", "project")
         out = self.doctor()
-        self.assertIn("project 3/3", out)
+        self.assertIn("project 6/6", out)
         self.assertIn("project 7/7", out)
 
     def test_user_plus_project_duplicate_warns(self):

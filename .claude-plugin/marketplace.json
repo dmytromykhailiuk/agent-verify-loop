@@ -11,7 +11,7 @@
       "name": "agent-verify-loop",
       "source": "./",
       "description": "Independent verification loop: skills, triage/reviewer/QA agents and hooks that gate a turn on verification of the code changes.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "category": "development",
       "keywords": [
         "verification",

@@ -42,6 +42,8 @@ Build one command: `$VL begin --standalone --roles qa [--url …] [--target …]
      agent `verify-qa` …" in Codex; from the Claude plugin the name is `agent-verify-loop:verify-qa`): spawn it in the
      background, then `$VL collect --run <id>`; if collect says the verdict is missing,
      `$VL record qa --run <id> <<'EOF'` + the agent's final message + `EOF`.
+   - If the `next:` lines print more roles than QA, spawn every one with its printed `subagent_type` and record a
+     missing verdict with `$VL record <role> --run <id>` (`<role>`: `reviewer`, `security`, `perf`, `ux`, `qa`).
    - Agent not installed: a general-purpose sub-agent whose task starts with `Read <skill_dir>/../verify-loop/agents/verify-qa.md
      and follow it as your instructions.` followed by the printed task message.
 4. `$VL judge --run <id>`.

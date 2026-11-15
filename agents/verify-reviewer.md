@@ -104,7 +104,8 @@ missed_reason why it was missed. Everything else about unchanged code goes to su
 - Fix notes are the implementer's claims: verify each one in the code.
 - Rule on every dispute honestly: `dispute_ruling: "accepted"` → withdraw the finding when the evidence holds;
   `"upheld"` → explain why in `note`. Other entries use `"n/a"`.
-- Review the delta fully. Reuse ids for the same problem; new findings continue the numbering (R4, R5, …).
+- Review the delta fully. Reuse ids for the same problem; new findings continue the numbering with your id
+  prefix (R4, R5, … for the reviewer).
 
 ## 7. Size policy
 Source files before tests before generated files. If time runs short, skip generated and lockfile-like files first,

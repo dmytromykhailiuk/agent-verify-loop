@@ -26,7 +26,7 @@ class BrowserPlanTest(h.Case):  # (4)
         self.triage_output("browser")
         out = self.brief(rid)
         self.assertEqual(out.splitlines(), [
-            "verify-loop · plan · attempt 1 · triage haiku (6s, ≈$0.0042, confidence high)",
+            "verify-loop · plan · attempt 1 · triage sonnet (6s, ≈$0.0042, confidence high)",
             "  review: full · sonnet/medium · standard — service + template; no auth/data paths",
             "  qa: browser · full · sonnet/medium — UI template changed (page.html); flow reachable at /scan",
             "  auth: missing (proj)",
@@ -225,7 +225,7 @@ class StandaloneTest(h.Case):  # (11)
         self.assertTrue(out.startswith(f"verify-review · run {rid} · standalone · proj · {a}..{b} · 1 files, +20/−0"))
         self.assertEqual(self.claude_calls(), [])
         ctx = self.ctx(rid)
-        self.assertEqual((ctx["kind"], ctx["roles"], ctx["target"]["code_ref"]), ("standalone", ["reviewer"], b))
+        self.assertEqual((ctx["kind"], ctx["roles"], ctx["target"]["code_ref"]), ("standalone", ["reviewer", "security", "perf", "ux"], b))
         brief = (self.run_dir(rid) / "brief.md").read_text()
         self.assertIn("## Acceptance criteria\n- g is exported", brief)
         self.assertIn("## Commit messages\n- add g", brief)

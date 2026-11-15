@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from . import config, state, util
+from .roles import ALL_ROLES, REVIEW_ROLES, SPECIALISTS
 
 SCOPES = ("none", "checks", "run", "browser")
 TIERS = ("standard", "deep")
@@ -178,6 +179,17 @@ def _snapshot(repo: dict, sid: str | None) -> dict:
         return gitsnap.snapshot(repo, sid or "vloop")
 
 
+def _spec_flags(args) -> dict:
+    return {s: getattr(args, s, None) for s in SPECIALISTS if getattr(args, s, None) in ("on", "off")}
+
+
+def _ctx_roles(roles: list[str]) -> list[str]:
+    """Standalone: a requested reviewer brings the specialists along (each still per triage / flags / repo)."""
+    if "reviewer" not in roles:
+        return roles
+    return [r for r in ALL_ROLES if r in roles or r in SPECIALISTS]
+
+
 # --------------------------------------------------------------------------- render + print
 
 
@@ -189,8 +201,11 @@ def _prepare(ctx: dict, plan_: dict, cfg: dict, project: dict, auth: dict | None
     att = rd / f"attempt-{n}"
     pending = planmod.consent_pending(ctx)
     running = []
-    for role in ("reviewer", "qa"):
-        pr = (plan_.get("roles") or {}).get(role)
+    planned = plan_.get("roles") or {}
+    spec_on = [s for s in SPECIALISTS if (planned.get(s) or {}).get("run")
+               or (planned.get(s) or {}).get("carried_from") is not None]
+    for role in ALL_ROLES:
+        pr = planned.get(role)
         if not pr or not pr.get("run") or (role == "qa" and pending):
             continue
         if role == "qa":
@@ -201,7 +216,8 @@ def _prepare(ctx: dict, plan_: dict, cfg: dict, project: dict, auth: dict | None
             else:
                 for stale in ("mcp.json", "pw-pointer.json"):
                     (att / stale).unlink(missing_ok=True)
-        prompts.render_role(role, run_dir=rd, ctx=ctx, attempt=n, plan=plan_, cfg=cfg, project=project, auth=auth)
+        prompts.render_role(role, run_dir=rd, ctx=ctx, attempt=n, plan=plan_, cfg=cfg, project=project, auth=auth,
+                            specialists=spec_on if role == "reviewer" else None)
         running.append(role)
     if pending:
         return
@@ -362,13 +378,13 @@ def cmd_begin(args) -> int:
                  "branch": gitsnap.current_branch(repo), "head": gitsnap.resolve_commit(repo, "HEAD")},
         "target": {"spec": "session", "base_tree": base["tree"], "base_kind": base["kind"], "code_ref": "worktree",
                    "paths": [], "base_at": base.get("at")},
-        "roles": ["reviewer", "qa"], "app_url": args.app_url or None, "transport": transports.configured(cfg).name,
+        "roles": list(ALL_ROLES), "app_url": args.app_url or None, "transport": transports.configured(cfg).name,
         "attempts": [{"n": 1, "begin_at": now, "tree": tree, "prefilter": pf["decision"],
                       "prefilter_reason": pf["reason"], "plan": None, "judge": None, "result": None,
                       "elapsed_s": None, "agents": {}}],
         "failed_attempts": 0, "inconclusive_streak": 0, "status": "open", "waived": [], "disputes": {},
         "user_notes": [], "flags": {"qa": args.qa, "review": args.review, "no_triage": bool(args.no_triage),
-                                    "model": None},
+                                    "model": None, **_spec_flags(args)},
         "browser_consent": None, "standalone": None,
     }
     from . import prompts
@@ -421,7 +437,7 @@ def _begin_rerun(args, run_id: str, notes: list[str]) -> int:
     if j.get("result") not in ("fail", "inconclusive"):
         raise Fail(f"attempt {prev} of run {run_id} was judged {j.get('result')}; nothing to re-run")
     flags = dict(ctx.get("flags") or {})
-    for k in ("qa", "review"):
+    for k in ("qa", "review", *SPECIALISTS):
         if getattr(args, k, None):
             flags[k] = getattr(args, k)
     if getattr(args, "no_triage", False):
@@ -542,9 +558,9 @@ def _begin_standalone(args) -> int:
     from . import classify, gitsnap, plan as planmod, prompts, transports
 
     roles = [r.strip() for r in (args.roles or "").split(",") if r.strip()]
-    if not roles or any(r not in ("reviewer", "qa") for r in roles):
-        raise Fail("--standalone needs --roles reviewer[,qa]")
-    roles = [r for r in ("reviewer", "qa") if r in roles]
+    if not roles or any(r not in ALL_ROLES for r in roles):
+        raise Fail(f"--standalone needs --roles with any of {','.join(ALL_ROLES)} (e.g. reviewer,qa)")
+    roles = [r for r in ALL_ROLES if r in roles]
     sid = _sid(args)
     repo = gitsnap.repo_for(args.repo or os.getcwd())
     if not repo:
@@ -558,7 +574,7 @@ def _begin_standalone(args) -> int:
     exploratory = not summary["files"] and "qa" in roles and bool(args.url or args.focus or args.criteria)
     if exploratory:
         roles = ["qa"]
-    prefix = {"reviewer": "verify-review", "qa": "verify-qa"}.get(roles[0]) if len(roles) == 1 else "verify"
+    prefix = ("verify-qa" if roles[0] == "qa" else "verify-review") if len(roles) == 1 else "verify"
     if not summary["files"] and not exploratory:
         print(f"{prefix} · NOTHING · target {t['spec']} has no changes")
         return 0
@@ -573,12 +589,12 @@ def _begin_standalone(args) -> int:
                  "branch": gitsnap.current_branch(repo), "head": gitsnap.resolve_commit(repo, "HEAD")},
         "target": {"spec": t["spec"], "base_tree": t["base"], "base_kind": t["kind"], "code_ref": t["code_ref"],
                    "paths": paths, "base_at": t["at"]},
-        "roles": roles, "app_url": args.url or args.app_url or None, "transport": transports.configured(cfg).name,
+        "roles": _ctx_roles(roles), "app_url": args.url or args.app_url or None, "transport": transports.configured(cfg).name,
         "attempts": [{"n": 1, "begin_at": now, "tree": tree, "prefilter": "standalone", "plan": None,
                       "judge": None, "result": None, "elapsed_s": None, "agents": {}}],
         "failed_attempts": 0, "inconclusive_streak": 0, "status": "open", "waived": [], "disputes": {},
         "user_notes": [], "flags": {"qa": args.qa, "review": args.review, "no_triage": bool(args.no_triage),
-                                    "model": args.model},
+                                    "model": args.model, **_spec_flags(args)},
         "browser_consent": None,
         "standalone": {"roles": roles, "focus": args.focus, "criteria": args.criteria, "url": args.url,
                        "exploratory": exploratory},
@@ -773,7 +789,7 @@ def _duration(info: dict | None, end: str | None = None) -> float | None:
 def _next_line(ctx: dict, n: int) -> str:
     att = _att(ctx, n)
     plan_ = _plan(ctx, n)
-    missing = [r for r in ("reviewer", "qa") if ((plan_.get("roles") or {}).get(r) or {}).get("run")
+    missing = [r for r in ALL_ROLES if ((plan_.get("roles") or {}).get(r) or {}).get("run")
                and not (att / f"{r}.json").exists() and not (att / f"{r}.error.json").exists()]
     if missing:
         return f"waiting for: {', '.join(missing)}"
@@ -1100,12 +1116,13 @@ def _integrity_check(ctx: dict, n: int, cfg: dict) -> dict | None:
     foreign = [p for p in changed if p not in main and not _under(p, scratch)]
     allowed = [str(p) for p in ((cfg.get("integrity") or {}).get("qa_allowed_paths") or []) if isinstance(p, str)]
     plan_roles = _plan(ctx, n).get("roles") or {}
-    ran = [r for r in ("reviewer", "qa") if (plan_roles.get(r) or {}).get("run")]
+    ran = [r for r in ALL_ROLES if (plan_roles.get(r) or {}).get("run")]
     flagged: dict[str, list[str]] = {}
     if "qa" in ran:
         flagged["qa"] = [p for p in foreign if not _under(p, allowed)]
-    if "reviewer" in ran:
-        flagged["reviewer"] = flagged["qa"] if "qa" in ran else foreign
+    for r in ran:
+        if r in REVIEW_ROLES:
+            flagged[r] = flagged["qa"] if "qa" in ran else foreign
     d.update({"after": after, "checked_at": util.now_iso(), "changed": changed,
               "main_edits": sorted(set(changed) & main), "flagged": flagged})
     util.atomic_write_json(path, d)
@@ -1116,7 +1133,7 @@ def _integrity_lines(d: dict | None) -> list[str]:
     if not d:
         return []
     out = []
-    for role in ("reviewer", "qa"):
+    for role in ALL_ROLES:
         files = (d.get("flagged") or {}).get(role) or []
         if files:
             out.append(f"{role}: integrity · verifier modified files: {util.fmt_paths(files)} → INCONCLUSIVE")
@@ -1138,7 +1155,7 @@ def cmd_collect(args) -> int:
     plan_ = _plan(ctx, n)
     agents = ctx["attempts"][n - 1].get("agents") or {}
     integ = _integrity_check(ctx, n, _cfg(ctx))
-    for role in ("reviewer", "qa"):
+    for role in ALL_ROLES:
         pr = (plan_.get("roles") or {}).get(role) or {}
         if not pr.get("run"):
             continue
@@ -1265,7 +1282,7 @@ def _apply_judge(ctx: dict, j: dict) -> dict:
                 state.save_session(st)
     roles = j.get("roles") or {}
     _event(ctx, "judge", n, result=result,
-           blocking={r: (roles.get(r) or {}).get("blocking", 0) for r in ("reviewer", "qa") if r in roles},
+           blocking={r: (roles.get(r) or {}).get("blocking", 0) for r in ALL_ROLES if r in roles},
            downgraded=sum(int((v or {}).get("downgraded") or 0) for v in roles.values()),
            failed_attempts=j.get("failed_attempts"), inconclusive_streak=j.get("inconclusive_streak"),
            elapsed_s=j.get("elapsed_s"))
@@ -1309,7 +1326,7 @@ def cmd_judge(args) -> int:
     if not plan_:
         raise Fail(f"attempt {n} has no plan yet: run {_vl()} brief --run {args.run} first")
     att = _att(ctx, n)
-    missing = [r for r in ("reviewer", "qa") if ((plan_.get("roles") or {}).get(r) or {}).get("run")
+    missing = [r for r in ALL_ROLES if ((plan_.get("roles") or {}).get(r) or {}).get("run")
                and not (att / f"{r}.json").exists() and not (att / f"{r}.error.json").exists()]
     if missing:
         raise Fail(f"waiting for: {', '.join(missing)}")
@@ -1484,6 +1501,9 @@ def register(sub) -> None:
     p.add_argument("--qa", choices=SCOPES, default=None)
     p.add_argument("--review", choices=TIERS, default=None)
     p.add_argument("--no-triage", action="store_true")
+    for s in SPECIALISTS:
+        p.add_argument(f"--{s}", choices=("on", "off"), default=None,
+                       help=f"force the {s} specialist on or off (default: repo `specialists.{s}`, else triage)")
     p.add_argument("--app-url", default=None)
     p.add_argument("--standalone", action="store_true")
     p.add_argument("--roles", default=None)
@@ -1503,12 +1523,12 @@ def register(sub) -> None:
     p.set_defaults(fn=cmd_brief)
 
     p = common(sub.add_parser("spawn", help="run a verify agent through its transport (headless, Herdr, …; blocks)"))
-    p.add_argument("role", choices=("reviewer", "qa", "retro"))
+    p.add_argument("role", choices=(*ALL_ROLES, "retro"))
     p.add_argument("--run", required=True)
     p.set_defaults(fn=cmd_spawn)
 
     p = common(sub.add_parser("spawn-wait", help="wait for a blocked/timed-out agent and record it"))
-    p.add_argument("role", choices=("reviewer", "qa", "retro"))
+    p.add_argument("role", choices=(*ALL_ROLES, "retro"))
     p.add_argument("--run", required=True)
     p.add_argument("--timeout", type=float, default=None)
     p.set_defaults(fn=cmd_spawn_wait)
@@ -1518,7 +1538,7 @@ def register(sub) -> None:
     p.set_defaults(fn=cmd_collect)
 
     p = common(sub.add_parser("record", help="record a verdict from an agent's final message"))
-    p.add_argument("role", choices=("reviewer", "qa"))
+    p.add_argument("role", choices=ALL_ROLES)
     p.add_argument("--run", required=True)
     p.add_argument("--file", default=None)
     p.set_defaults(fn=cmd_record)

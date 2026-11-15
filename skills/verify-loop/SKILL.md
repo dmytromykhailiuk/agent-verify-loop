@@ -1,7 +1,7 @@
 ---
 name: verify-loop
 description: Independent verification loop for code changes made in this session — a cheap triage agent sizes the change, a fresh code-review agent (always) and a QA agent (tests, the running app, Playwright for web UIs — only when triage says it adds value) check it; fix blocking findings and re-run until it passes; after 3 failed attempts escalate to the user. Use after implementing or changing code in a git repo, when the verify-loop Stop gate asks for it, or on "/verify-loop", "$verify-loop", "verify my changes", "run QA and review", "перевір зміни", "прожени QA і рев'ю".
-argument-hint: "[status|reset] [--qa none|checks|run|browser] [--review standard|deep] [--no-triage] [--repo <path>]"
+argument-hint: "[status|reset] [--qa none|checks|run|browser] [--review standard|deep] [--security|--perf|--ux on|off] [--no-triage] [--repo <path>]"
 allowed-tools: Bash(${CLAUDE_SKILL_DIR}/bin/vloop *)
 ---
 
@@ -21,7 +21,8 @@ the same way so permission rules match. The session id comes from the environmen
 ## The loop
 
 0. **Arguments** (`$ARGUMENTS`). `status` → `$VL status`, show the output, stop. `reset` → `$VL reset`, show the
-   output, stop. Anything else (`--qa`, `--review`, `--no-triage`, `--repo`) is passed to `begin`.
+   output, stop. Anything else (`--qa`, `--review`, `--security`, `--perf`, `--ux`, `--no-triage`, `--repo`) is
+   passed to `begin`.
 
 1. **Self-check first.** Finish the task. Run the fast checks you already know (typecheck, lint, related tests) and
    fix what they show. Don't start the loop on half-done work.
@@ -57,8 +58,12 @@ the same way so permission rules match. The session id comes from the environmen
 
 4. **Spawn the agents** exactly as the `next:` lines say (see Launch below). Don't edit files while they run.
    - In-session lines (`Agent(...)` in Claude Code, "spawn the custom agent …" in Codex): spawn every printed role in
-     one message, in the background; when they are done, `$VL collect --run <id>`. If collect says a verdict is
-     missing: `$VL record <role> --run <id> <<'EOF'` + the agent's final message verbatim + `EOF`.
+     one message, in the background, each with the `subagent_type` printed on its line; when they are done,
+     `$VL collect --run <id>`. If collect says a verdict is missing: `$VL record <role> --run <id> <<'EOF'` + the
+     agent's final message verbatim + `EOF` (`<role>` is `reviewer`, `security`, `perf`, `ux` or `qa`).
+   - The plan may add specialist reviewers next to the reviewer: `security` (blocks only with evidence), `perf` and
+     `ux` (advisory: their findings are reported but never fail the loop). Spawn every role the `next:` lines print,
+     never only the reviewer and QA.
    - `$VL spawn <role> --run <id>` lines (headless or an extension transport): one Bash call per
      role, all in one message, in the background. Wait for the notifications; don't poll. Exit 3 → the child is
      blocked on a dialog: show the user the snapshot it printed and ask; never answer a permission or trust dialog
@@ -102,11 +107,12 @@ the same way so permission rules match. The session id comes from the environmen
 
 Spawn each verifier by the form the `next:` lines print:
 
-- **Claude Code**: the Agent tool with `subagent_type` `verify-reviewer` / `verify-qa`. Installed from the plugin they
-  are listed as `agent-verify-loop:verify-reviewer` / `agent-verify-loop:verify-qa`; use whichever is listed (the
-  plan prints the other form too). The prompt is exactly the printed one (`Your task file is …`), the model is the
+- **Claude Code**: the Agent tool with the printed `subagent_type` (`verify-reviewer`, `verify-security`,
+  `verify-perf`, `verify-ux`, `verify-qa`). Installed from the plugin they are listed as
+  `agent-verify-loop:verify-reviewer` etc.; use whichever is listed (the plan prints the other form too). The prompt is exactly the printed one (`Your task file is …`), the model is the
   printed one, and `run_in_background: true`.
-- **Codex**: spawn the custom agent named `verify-reviewer` / `verify-qa` with the printed message, and wait for it.
+- **Codex**: spawn the custom agent named on the line (`verify-reviewer`, `verify-security`, `verify-perf`,
+  `verify-ux`, `verify-qa`) with the printed message, and wait for it.
   Codex plugins can't ship agents: if they are not in your agent list, `vloop setup --agent codex --only agents`
   installs them (`$VL doctor` shows what is missing).
 - **Headless / extension transports**: `$VL spawn <role> --run <id>` runs the verifier as a child process
@@ -131,6 +137,10 @@ Never approve a sub-agent's permission or trust dialog on the user's behalf; sho
   `begin` (or to `begin --rerun` if the loop is already open). It overrides triage and repo floors for every attempt
   of the run; the review still runs. Never start QA, triage-chosen or not, against that request, and say in the final
   answer that QA was skipped by the user.
+- If the user asked for or against a security, performance or UX review: pass `--security on|off`, `--perf on|off`
+  or `--ux on|off` to `begin` (or `begin --rerun`). A flag beats the repo's `specialists` setting
+  (`"specialists": {"security": "auto|on|off", …}` in `.agent-verify-loop.json`), which beats triage. Re-runs only
+  turn specialists on, never off, unless a flag says `off`.
 - If you stopped to ask the user something and the gate blocks, end with the question or run
   `$VL defer --reason "<why>"`.
 - Verify agents never spawn agents; delegated sub-agents don't run this loop: they list the changed files in their

@@ -147,7 +147,8 @@ class TestMetrics(Base):
         tri = self.agents("triage")
         self.assertEqual([(a["attempt"], a["total"], a["cost_usd"]) for a in tri], [(1, 9432, 0.004)])
         self.assertEqual(self.m["tokens"]["by_role"],
-                         {"triage": 9432, "reviewer": 6111, "qa": 3703, "retro": 0, "other_subagents": 100})
+                         {"triage": 9432, "reviewer": 6111, "security": 0, "perf": 0, "ux": 0, "qa": 3703, "retro": 0,
+                          "other_subagents": 100})
 
     def test_phases(self):
         ph = {p["name"]: p for p in self.m["phases"]}

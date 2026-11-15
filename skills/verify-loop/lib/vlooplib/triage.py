@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 
-from . import platforms, state, util
+from . import platforms, roles, state, util
 
 PROMPT = "Triage the change described on stdin. Answer only with the JSON object."
 CODEX_SCHEMA_FILE = "triage.codex.schema.json"
@@ -158,7 +158,7 @@ def _codex_agent_info(events: str, model: str | None, duration_s: float, error: 
             "error": error}
 
 
-TRIAGE_KEYS = ("qa", "review", "qa_scope", "scope", "review_tier", "tier", "change_size")
+TRIAGE_KEYS = ("qa", "review", "qa_scope", "scope", "review_tier", "tier", "change_size", "specialists")
 _SIZE = ("small", "medium", "large")
 
 
@@ -189,6 +189,47 @@ _FLAT = {"qa_scope": ("qa", "scope"), "scope": ("qa", "scope"), "needs_login": (
          "review_focus": ("review", "focus")}
 
 
+_TRUE = ("true", "yes", "on", "1", "run")
+
+
+def _flag(v) -> bool:
+    if isinstance(v, str):
+        return v.strip().lower() in _TRUE
+    return bool(v)
+
+
+def _specialists(o: dict) -> dict:
+    raw = o.pop("specialists", None)
+    if isinstance(raw, list):
+        base = {str(x).strip().lower(): {"run": True} for x in raw}
+    elif isinstance(raw, dict):
+        base = raw
+    else:
+        base = {}
+    out = {}
+    for role in roles.SPECIALISTS:
+        v = base.get(role)
+        if v is None and role in o:
+            v = o.pop(role)
+        sub = dict(v) if isinstance(v, dict) else ({} if v is None else {"run": v})
+        for key in ("run", "reason", "focus"):
+            flat = f"{role}_{key}"
+            if flat in o:
+                sub.setdefault(key, o.pop(flat))
+        if role == "ux":
+            for flat in ("ui_spec", "ux_ui_spec", "ux_spec"):
+                if flat in o:
+                    sub.setdefault("ui_spec", o.pop(flat))
+        sub["run"] = _flag(sub.get("run", False))
+        sub["reason"] = _text(sub.get("reason"))
+        sub["focus"] = _list(sub.get("focus"))
+        if role == "ux":
+            spec = str(sub.get("ui_spec") or "").strip().lower()
+            sub["ui_spec"] = spec if spec in roles.UI_SPEC else "n/a"
+        out[role] = sub
+    return out
+
+
 def reshape(obj: dict, summary: dict | None = None) -> dict:
     """Repair near-miss triage output into the schema shape: flat keys (`qa_scope`, `review_tier`, `needs_login`,
     `reasons`, `focus`), a bare string for `qa`/`review`, list reasons, missing size/risk/confidence (§2.8)."""
@@ -216,6 +257,7 @@ def reshape(obj: dict, summary: dict | None = None) -> dict:
         if isinstance(sub.get(key), str):
             sub[key] = sub[key].strip().lower()
     o["qa"], o["review"] = qa, rv
+    o["specialists"] = _specialists(o)
     if o.get("change_size") not in _SIZE:
         o["change_size"] = _size_from(summary)
     o.setdefault("risk", "medium")
@@ -238,7 +280,9 @@ def write(run_dir: Path, ctx: dict, attempt: int, tri: dict) -> dict:
                            source=tri.get("source"), model=ag.get("model"), duration_s=ag.get("duration_s"),
                            cost_usd=ag.get("cost_usd"), qa_scope=(tri.get("qa") or {}).get("scope"),
                            review_tier=(tri.get("review") or {}).get("tier"), change_size=tri.get("change_size"),
-                           risk=tri.get("risk"), confidence=tri.get("confidence"), error=ag.get("error"))
+                           risk=tri.get("risk"), confidence=tri.get("confidence"), error=ag.get("error"),
+                           specialists=[r for r, v in (tri.get("specialists") or {}).items()
+                                        if isinstance(v, dict) and v.get("run")])
     return tri
 
 
@@ -252,7 +296,7 @@ def run_triage(run_dir: Path, ctx: dict, attempt: int, cfg: dict, summary: dict,
     text = prompts.render_triage(run_dir=run_dir, ctx=ctx, attempt=attempt, summary=summary, cfg=cfg,
                                  project=project, auth=auth, previous_plan=previous_plan, delta=delta)
     t = cfg.get("triage") or {}
-    timeout = float(t.get("timeout_s") or 120)
+    timeout = float(t.get("timeout_s") or 300)
     plat = platforms.detect().name
     codex = plat == "codex"
     if codex:
@@ -260,7 +304,7 @@ def run_triage(run_dir: Path, ctx: dict, attempt: int, cfg: dict, summary: dict,
 
         alias = common.platform_model(cfg, "triage", None, "codex") or "codex"
     else:
-        alias = str(t.get("model") or "haiku")
+        alias = str(t.get("model") or "sonnet")
     doc, error, obj, out, out_path = None, None, None, "", None
     t0 = time.monotonic()
     try:
@@ -298,7 +342,7 @@ def run_triage(run_dir: Path, ctx: dict, attempt: int, cfg: dict, summary: dict,
         return _codex_agent_info(out, alias, dur, err_) if codex else _agent_info(doc, alias, dur, err_)
     if error is None:
         tri = {"schema": 1, "role": "triage", "run_id": ctx["run_id"], "attempt": attempt, "source": "triage",
-               **{k: obj.get(k) for k in ("change_size", "risk", "qa", "review", "confidence")},
+               **{k: obj.get(k) for k in ("change_size", "risk", "qa", "review", "specialists", "confidence")},
                "agent": info(None)}
         norm, _ = verdict.normalize("triage", tri, run_id=ctx["run_id"], attempt=attempt)
         errs = verdict.validate("triage", norm)

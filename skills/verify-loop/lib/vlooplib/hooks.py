@@ -9,10 +9,11 @@ from pathlib import Path
 
 from . import config, paths, platforms, state, util
 from .platforms.base import HookEvent, Platform
+from .roles import AGENT, ALL_ROLES
 
 EVENTS = ("session-start", "prompt", "pre-tool", "post-tool", "stop", "subagent-start", "subagent-stop")
-GUARDED = {"verify-reviewer": "reviewer", "verify-qa": "qa"}
-GUARD_ROLES = ("reviewer", "qa")
+GUARDED = {AGENT[r]: r for r in ALL_ROLES}
+GUARD_ROLES = ALL_ROLES
 GUARD_ROLE_ENV = "VLOOP_GUARD_ROLE"
 UNTRACKED_PREFIXES = ("verify-", "vault-")
 
@@ -736,6 +737,6 @@ def register(sub) -> None:
     p.set_defaults(fn=lambda a: main([a.event]))
     from . import guard
 
-    g = sub.add_parser("guard", help="reviewer/QA guard on a PreToolUse JSON (stdin)")
-    g.add_argument("role", choices=("reviewer", "qa"))
+    g = sub.add_parser("guard", help="reviewer/specialist/QA guard on a PreToolUse JSON (stdin)")
+    g.add_argument("role", choices=ALL_ROLES)
     g.set_defaults(fn=guard.cmd_guard)

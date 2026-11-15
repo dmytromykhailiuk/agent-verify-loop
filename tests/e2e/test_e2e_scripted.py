@@ -22,7 +22,7 @@ sys.path.insert(0, str(E2E_DIR.parent))
 from helpers import VL, VLOOP, HermeticCase  # noqa: E402
 
 SID = "e2e00000-0000-4000-8000-0000000000a1"
-UNSET = ("E2E_TRIAGE_SCOPE", "E2E_TRIAGE_TIER")
+UNSET = ("E2E_TRIAGE_SCOPE", "E2E_TRIAGE_TIER", "E2E_TRIAGE_SPECIALISTS")
 
 SUM_V1 = "export function sum(values) {\n  return values[0] + values[1];\n}\n"
 SUM_V2 = ("export function sum(values) {\n  let total = 0;\n  for (let i = 0; i < values.length - 1; i++) {\n"
@@ -219,7 +219,7 @@ class E2E(HermeticCase):
         run, out = self.begin()
         self.assertIn("prefilter: triage", out)
         plan_out = self.ok("brief", "--run", run, stdin=BRIEF)
-        self.assertIn("verify-loop · plan · attempt 1 · triage haiku", plan_out)
+        self.assertIn("verify-loop · plan · attempt 1 · triage sonnet", plan_out)
         self.assertIn("qa: run · full", plan_out)
         self.assertIn(f"then: {VL} collect --run " + run, plan_out)
         calls = [json.loads(ln) for ln in (self.tmp / "triage-calls.jsonl").read_text().splitlines()]
@@ -265,6 +265,48 @@ class E2E(HermeticCase):
         self.assertEqual([r["run_id"] for r in ledger], [run])
         self.assertEqual((ledger[0]["outcome"], ledger[0]["attempts"]), ("passed", 2))
         self.assertTrue((self.run_dir(run) / "retro" / "plan.json").exists())
+
+    def test_a9_security_fail_fix_recheck_pass(self):
+        os.environ["E2E_TRIAGE_SPECIALISTS"] = "security"
+        os.environ["E2E_TRIAGE_SCOPE"] = "none"
+        self.edit("lib/sum.js", SUM_V2)
+        run, _ = self.begin()
+        plan_out = self.ok("brief", "--run", run, stdin=BRIEF)
+        self.assertIn("  security: full · sonnet/high — e2e fake triage: security", plan_out)
+        self.assertIn('Agent(subagent_type="verify-security", model="sonnet", description="verify security #1"',
+                      plan_out)
+        att1 = self.run_dir(run) / "attempt-1"
+        self.assertIn("A security specialist reviews this change in parallel",
+                      (att1 / "reviewer.prompt.md").read_text())
+        self.assertIn(str(att1 / "security.json"), (att1 / "security.prompt.md").read_text())
+        self.record("reviewer", run, reviewer_pass())
+        sec = {"schema": 2, "role": "security", "verdict": "fail", "summary": "Unbounded input.",
+               "findings": [{"id": "SC1", "severity": "major", "confidence": "high", "category": "security",
+                             "file": "lib/sum.js", "line": 3, "title": "Attacker-sized loop",
+                             "problem": "values comes from the request body unchecked.",
+                             "scenario": "POST /sum with a 10^9-element array → loop in lib/sum.js:3 → the server "
+                                         "hangs for every user",
+                             "evidence_ref": "lib/sum.js:1", "suggestion": "Cap values.length.", "status": "new"}],
+               "suggestions": []}
+        self.assertIn("security: FAIL", self.record("security", run, sec))
+        j1 = self.ok("judge", "--run", run)
+        self.assertTrue(j1.startswith("RESULT: FAIL"), j1)
+        self.assertIn("SC1", j1)
+        r2 = self.rerun(run, SUM_V2.replace("let total = 0;", "if (values.length > 1000) throw new Error('too many');"
+                                                               "\n  let total = 0;"), "SC1: capped the input size")
+        p2 = self.plan(run, 2)
+        self.assertEqual((p2["roles"]["security"]["run"], p2["roles"]["security"]["mode"]), (True, "recheck"))
+        self.assertEqual((p2["roles"]["security"]["model"], p2["roles"]["security"]["effort"]), ("sonnet", "high"))
+        self.assertEqual((p2["roles"]["reviewer"]["run"], p2["roles"]["reviewer"]["mode"]), (True, "delta"))
+        self.assertIn("security: recheck", r2)
+        self.record("reviewer", run, reviewer_pass())
+        self.record("security", run, {"schema": 2, "role": "security", "verdict": "pass", "summary": "Capped.",
+                                      "findings": [], "suggestions": [],
+                                      "rechecked": [{"id": "SC1", "status": "fixed", "note": "cap added",
+                                                     "dispute_ruling": "n/a"}]})
+        j2 = self.ok("judge", "--run", run)
+        self.assertTrue(j2.startswith("RESULT: PASS"), j2)
+        self.assertEqual(self.loop()["status"], "passed")
 
     def test_a4_escalate_and_decide(self):
         self.edit("lib/sum.js", SUM_V2)

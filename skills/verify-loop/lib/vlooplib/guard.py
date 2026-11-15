@@ -7,6 +7,7 @@ import re
 import sys
 
 from . import util
+from .roles import REVIEW_ROLES
 
 EDIT_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 SEPARATORS = {"&&", "||", ";", ";;", "|", "|&", "&", "\n", "(", ")"}
@@ -487,28 +488,28 @@ def _reviewer_bash(cmd: str) -> str | None:
     return None
 
 
-def check_reviewer(payload: dict) -> dict | None:
+def check_reviewer(payload: dict, role: str = "reviewer") -> dict | None:
     tool = payload.get("tool_name") or ""
     ti = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
     pp = patch_paths(payload)
     if pp is not None:
         if pp and all(_under(p, runs_dir()) for p in pp):
             return _allow_reviewer()
-        return _deny("reviewer", f"write only your verdict file under {runs_dir()}", _reviewer_hint())
+        return _deny(role, f"write only your verdict file under {runs_dir()}", _reviewer_hint())
     if tool in EDIT_TOOLS:
         path = ti.get("file_path") or ti.get("notebook_path") or ""
         if path and _under(path, runs_dir()):
             return _allow_reviewer()
-        return _deny("reviewer", f"write only your verdict file under {runs_dir()}", _reviewer_hint())
+        return _deny(role, f"write only your verdict file under {runs_dir()}", _reviewer_hint())
     if tool in ("Bash", "shell", "exec_command", "local_shell"):
         from .platforms import codex
 
         ep = embedded_patch_paths(payload)
         if ep is not None and not (ep and all(_under(p, runs_dir()) for p in ep)):
-            return _deny("reviewer", f"write only your verdict file under {runs_dir()}", _reviewer_hint())
+            return _deny(role, f"write only your verdict file under {runs_dir()}", _reviewer_hint())
         why = _reviewer_bash(codex.shell_command(ti.get("command")) or "")
         if why:
-            return _deny("reviewer", why, _reviewer_hint())
+            return _deny(role, why, _reviewer_hint())
         return _allow_reviewer()
     return None
 
@@ -683,8 +684,8 @@ def check_qa(payload: dict) -> dict | None:
 
 
 def check(role: str, payload: dict) -> dict | None:
-    if role == "reviewer":
-        return check_reviewer(payload)
+    if role in REVIEW_ROLES:
+        return check_reviewer(payload, role)
     if role == "qa":
         return check_qa(payload)
     return None

@@ -110,8 +110,8 @@ home. Its `herdr-agent version --json` must report `integration` ≥ 1; otherwis
 - **Selection.** `auto` picks it inside Herdr (`HERDR_ENV=1`) at depth 0. A delegated sub-agent (Herdr depth ≥ 1)
   falls back to `agent`, and the loop is not run there (it lists changed files for the orchestrator instead). Force it
   with `"transport": "herdr"`.
-- **Spawning.** `begin` prints one `vloop spawn reviewer --run <id>` and one `vloop spawn qa --run <id>` line. Run each
-  as its own background Bash call; the tab closes when the agent finishes.
+- **Spawning.** `begin` prints one `vloop spawn <role> --run <id>` line per role that runs (`reviewer`, any specialist
+  `security`/`perf`/`ux`, `qa`). Run each as its own background Bash call; the tab closes when the agent finishes.
 - **Dialogs.** A folder-trust or permission dialog in a tab makes `spawn` exit 3 with the screen snapshot. Show it to
   the user, let them decide, run what they decided (`herdr-agent keys …`), then `vloop spawn-wait <role> --run <id>`.
   Exit 4 (timeout) → `vloop spawn-wait` later. When the prompt was never delivered (`last_prompt_at_ns` is 0 in

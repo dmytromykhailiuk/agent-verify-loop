@@ -16,6 +16,7 @@ the worktree before and after each verifier ran.
 | `verify-review`, `verify-qa` skills | One standalone review or QA pass of the session, the working tree, a range, a branch or a PR. |
 | `verify-retro` skill | Retro of a run or session: metrics, ledger, and (with agent-vault) lessons and change proposals. |
 | `verify-triage`, `verify-reviewer`, `verify-qa` agents | The independent verifiers. Triage runs headless (`claude -p` / `codex exec`). |
+| `verify-security`, `verify-perf`, `verify-ux` agents | Read-only specialist reviewers, turned on per change by triage, a flag or the repo config. |
 | Hooks | SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SubagentStart, SubagentStop: change tracking, the gate, the guard. |
 | `vloop` CLI | Python 3.10+, no dependencies: the bookkeeping behind all of the above, plus `setup` and `doctor`. |
 
@@ -26,7 +27,7 @@ the worktree before and after each verifier ran.
                                                             │
    self-check ─► begin ─► brief (criteria, how to exercise, out of scope) ─► triage sizes it
                                                             │
-                  consent (only for browser QA) ─► spawn reviewer (+ QA if triage says so)
+      consent (only for browser QA) ─► spawn reviewer (+ specialists, + QA if triage says so)
                                                             │
                                       collect ─► integrity check ─► judge
                                                             │
@@ -38,6 +39,18 @@ the worktree before and after each verifier ran.
 
 Triage picks the QA scope (`none`, `checks`, `run`, `browser`) and the reviewer tier (`standard`, `deep`); a repo can
 set floors. Browser QA needs your consent each time and always runs headless with a pinned Playwright MCP.
+
+Triage can also turn on specialist reviewers that run next to the reviewer:
+
+| Specialist | Turned on when | Effect on the result |
+|---|---|---|
+| `security` | auth/session/token/crypto/permission/payment code, untrusted input, workflows, SQL | Blocks only with evidence: a security/data finding with medium+ confidence, a valid anchor, an input → sink → impact scenario and an `evidence_ref` to the entry point, inside the diff. |
+| `perf` | hot paths, IO or queries in loops, large client imports | Advisory: findings are reported, never fail the loop. |
+| `ux` | UI files changed and no clear UI spec in the request (reads code, no browser) | Advisory: findings are reported, never fail the loop. |
+
+Precedence: `--security|--perf|--ux on|off` on `begin` > repo `specialists` (`auto`, `on`, `off`) > triage. A re-run
+never turns a specialist off: a failed one rechecks, a passed one reviews the delta or is carried forward when the
+delta touches nothing it covers. When a specialist runs, the reviewer skips that part of its checklist.
 
 ## Requirements
 
@@ -129,8 +142,8 @@ into the plugin folder, which is replaced on updates). On its own it installs on
 ## Use
 
 `/verify-loop` in Claude Code, `$verify-loop` in Codex, or plain words ("verify my changes"). The Stop gate also asks
-for it when changes are unverified. Flags: `--qa none|checks|run|browser`, `--review standard|deep`, `--no-triage`,
-`--repo <path>`; `status` and `reset` as the first argument.
+for it when changes are unverified. Flags: `--qa none|checks|run|browser`, `--review standard|deep`,
+`--security|--perf|--ux on|off`, `--no-triage`, `--repo <path>`; `status` and `reset` as the first argument.
 
 | Command | What it does |
 |---|---|
@@ -159,7 +172,8 @@ Effective config = defaults ⊕ user config ⊕ repo config (allowed keys only) 
 - **Repo config**: `.agent-verify-loop.local.json` (personal, keep it out of git), then `.agent-verify-loop.json`
   (shared); the legacy `.claude/verify.json` is still read. `vloop repo-config init` creates one. Repo keys:
   `enabled`, `commands` (typecheck/lint/test commands with `{project}`/`{files}`), `app` (URL, start command),
-  `auth`, `floors` (minimum QA scope / review tier), `*_globs`, `notes`.
+  `auth`, `floors` (minimum QA scope / review tier), `specialists` (`{"security": "auto|on|off", "perf": …, "ux": …}`),
+  `*_globs` (including `security_globs`), `notes`.
 - **State**: `${XDG_STATE_HOME:-~/.local/state}/agent-verify-loop` (`VERIFY_STATE_DIR`). **Data** (browser toolbox,
   `installed.json`): `${XDG_DATA_HOME:-~/.local/share}/agent-verify-loop`.
 
@@ -169,8 +183,9 @@ Effective config = defaults ⊕ user config ⊕ repo config (allowed keys only) 
 | `transport` | `auto` (default), `agent`, `headless`, `herdr` or a third-party name; `transport_modules` lists extension files. See [docs/transports.md](docs/transports.md). |
 | `integrity.enabled` | Compare the worktree before and after each verifier; a change outside the run dir makes the verdict INCONCLUSIVE. `integrity.qa_allowed_paths` whitelists paths QA may touch (e.g. a test database). |
 | `platforms.codex.triage` | `{model, effort}` for `codex exec` triage (`null` model = Codex default). |
-| `platforms.codex.models` | `{reviewer, qa}` model names for Codex verifiers; `null` = the session's model. |
-| `triage.*`, `models.*`, `timeouts_s`, `loop.*` | Triage model and budget, reviewer/QA models per tier, per-role timeouts, attempt limits. |
+| `platforms.codex.models` | `{reviewer, security, perf, ux, qa}` model names for Codex verifiers; `null` = the session's model. |
+| `triage.*`, `models.*`, `timeouts_s`, `loop.*` | Triage model and budget (sonnet/medium), reviewer/specialist/QA models per tier (`security`: `standard`, `high_risk` when triage rates the risk high, `delta`), per-role timeouts, attempt limits. |
+| `specialists` | `{"security", "perf", "ux"}` each `auto` (default: triage decides), `on` or `off`. Allowed in repo config. |
 | `qa_browser_consent` | `ask` (default). Browser QA never starts without your answer. |
 | `cost_source` | `auto` (default): take USD, tokens and wall/active/waiting/idle time of the main session and the loop's agents from [agent-cost](#integration-with-agent-cost) when it is installed, else vloop's own numbers. `own`: always vloop's own. `agent-cost`: like `auto`, but `retro-plan` prints a warning when agent-cost is unavailable. Allowed in repo config. |
 | `gate.scan_on_stop` | Per platform: scan the worktree at Stop to catch edits made through Bash (default on for Codex, which reports no edit paths for shell commands). |

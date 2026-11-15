@@ -68,14 +68,15 @@ EXPECTED_AGENTS = {
     "verify-triage": {
         "name": "verify-triage",
         "description": "Cheap, independent triage for the verify loop. Reads the user's request, the acceptance "
-                       "criteria and a capped diff, and decides whether QA adds value (none / checks / run / browser) "
-                       "and the reviewer tier (standard Sonnet / deep Opus). Returns one JSON object. Run headless by "
+                       "criteria and a capped diff, and decides whether QA adds value (none / checks / run / browser), "
+                       "the reviewer tier (standard Sonnet / deep Opus) and which specialist reviewers (security / "
+                       "perf / ux) to run. Returns one JSON object. Run headless by "
                        "vloop (`claude -p --agent verify-triage` or `codex exec`), never as an in-session "
                        "sub-agent.",
         "tools": "Read, Grep, Glob, StructuredOutput",
-        "model": "haiku",
-        "effort": "low",
-        "maxTurns": "6",
+        "model": "sonnet",
+        "effort": "medium",
+        "maxTurns": "10",
         "color": "yellow",
     },
     "verify-reviewer": {
@@ -115,17 +116,27 @@ EXPECTED_AGENTS = {
     },
 }
 
+SPECIALIST_AGENTS = ("verify-security", "verify-perf", "verify-ux")
+ALL_AGENTS = ("verify-triage", "verify-reviewer", "verify-qa", *SPECIALIST_AGENTS)
+SHARED_SECTIONS = ("1. Role & independence", "2. Procedure", "5. Severity", "6. Re-review protocol (attempt ≥ 2)",
+                   "7. Size policy")
+
+
+def sections(body: str) -> dict[str, str]:
+    return {m.group(1): m.group(0) for m in re.finditer(r"(?ms)^## (\d\. [^\n]+)\n.*?(?=^## \d\. |\Z)", body)}
+
+
 EXPECTED_SKILLS = {
     "verify-loop": {
         "name": "verify-loop",
-        "argument-hint": "[status|reset] [--qa none|checks|run|browser] [--review standard|deep] [--no-triage] "
-                         "[--repo <path>]",
+        "argument-hint": "[status|reset] [--qa none|checks|run|browser] [--review standard|deep] "
+                         "[--security|--perf|--ux on|off] [--no-triage] [--repo <path>]",
         "allowed-tools": LOOP_TOOLS,
     },
     "verify-review": {
         "name": "verify-review",
         "argument-hint": "[<A..B>|<branch>|pr:<id>] [--focus \"…\"] [--criteria \"…\"] "
-                         "[--review standard|deep] [--model sonnet|opus]",
+                         "[--review standard|deep] [--model sonnet|opus] [--security|--perf|--ux on|off]",
         "disable-model-invocation": "true",
         "allowed-tools": SIBLING_TOOLS,
     },
@@ -180,6 +191,62 @@ class AgentFrontmatterTest(HermeticCase):
             self.assertIn(term, body)
 
 
+class SpecialistAgentTest(HermeticCase):
+    def test_frontmatter_matches_reviewer(self):
+        rev, _ = parse_frontmatter(AGENTS / "verify-reviewer.md")
+        for name in SPECIALIST_AGENTS:
+            fm, _ = parse_frontmatter(AGENTS / f"{name}.md")
+            role = name.split("-", 1)[1]
+            self.assertEqual(fm["name"], name)
+            for key in ("tools", "disallowedTools", "permissionMode", "model"):
+                self.assertEqual(fm[key], rev[key], f"{name}: {key}")
+            self.assertEqual(fm["hooks"], guard_hooks(role), name)
+            self.assertEqual(fm["effort"], "high" if role == "security" else "medium", name)
+            self.assertTrue(fm["description"].strip())
+
+    def test_shared_sections_identical_to_reviewer(self):
+        _, rev = parse_frontmatter(AGENTS / "verify-reviewer.md")
+        expected = sections(rev)
+        for head in SHARED_SECTIONS:
+            self.assertIn(head, expected)
+        for name in SPECIALIST_AGENTS:
+            _, body = parse_frontmatter(AGENTS / f"{name}.md")
+            got = sections(body)
+            self.assertEqual(list(got), ["1. Role & independence", "2. Procedure", "3. What to check (your charter)",
+                                         "4. Calibration", "5. Severity", "6. Re-review protocol (attempt ≥ 2)",
+                                         "7. Size policy",
+                                         "8. Output contract"], name)
+            for head in SHARED_SECTIONS:
+                self.assertEqual(got[head].rstrip(), expected[head].rstrip(), f"{name}: {head}")
+
+    def test_output_contract_per_role(self):
+        for name, role, fp, sp, field in (("verify-security", "security", "SC", "SCS", "evidence_ref"),
+                                          ("verify-perf", "perf", "PF", "PFS", "measurement"),
+                                          ("verify-ux", "ux", "UX", "UXS", "wcag")):
+            _, body = parse_frontmatter(AGENTS / f"{name}.md")
+            contract = sections(body)["8. Output contract"]
+            for term in (f'`role` ("{role}")', f"`id` {fp}1", f"`id` {sp}1", f"`{field}`", "```json", "apply_patch"):
+                self.assertIn(term, contract, f"{name}: {term}")
+
+    def test_advisory_roles_say_they_never_block(self):
+        for name in ("verify-perf", "verify-ux"):
+            fm, body = parse_frontmatter(AGENTS / f"{name}.md")
+            text = norm(fm["description"] + " " + body).lower()
+            self.assertIn("advisory", text, name)
+            self.assertIn("never block", text, name)
+            self.assertIn("never make it fail", text, name)
+        _, sec = parse_frontmatter(AGENTS / "verify-security.md")
+        calib = norm(sections(sec)["4. Calibration"])
+        for term in ("`security` or `data`", "high or medium", "at least 40 characters", "`evidence_ref` is `path:line`",
+                     "inside the diff", "pre-existing"):
+            self.assertIn(term, calib)
+
+    def test_ux_reads_code_without_browser(self):
+        fm, body = parse_frontmatter(AGENTS / "verify-ux.md")
+        self.assertNotIn("playwright", (str(fm) + body).lower())
+        self.assertIn("no browser", fm["description"])
+
+
 class AgentRenderTest(HermeticCase):
     def test_placeholders_only_in_frontmatter(self):
         for src in sorted(AGENTS.glob("*.md")):
@@ -190,7 +257,7 @@ class AgentRenderTest(HermeticCase):
         from vlooplib import paths, setup
 
         out = setup.render_agent_files("claude", self.tmp / "claude")
-        self.assertEqual({p.name for p in out}, {"verify-triage.md", "verify-reviewer.md", "verify-qa.md"})
+        self.assertEqual({p.name for p in out}, {f"{n}.md" for n in ALL_AGENTS})
         for path, text in out.items():
             self.assertNotIn("{{", text, path.name)
         reviewer = next(v for k, v in out.items() if k.name == "verify-reviewer.md")
@@ -207,7 +274,7 @@ class AgentRenderTest(HermeticCase):
         from vlooplib import setup
 
         out = setup.render_agent_files("codex", self.tmp / "codex")
-        self.assertEqual({p.name for p in out}, {"verify-triage.toml", "verify-reviewer.toml", "verify-qa.toml"})
+        self.assertEqual({p.name for p in out}, {f"{n}.toml" for n in ALL_AGENTS})
         for path, text in out.items():
             doc = tomllib.loads(text)
             self.assertEqual(doc["name"], path.stem)
@@ -217,7 +284,7 @@ class AgentRenderTest(HermeticCase):
             self.assertNotIn("mcpServers", doc)
 
     def test_verifiers_name_their_write_tool_for_both_platforms(self):
-        for name in ("verify-reviewer", "verify-qa"):
+        for name in ("verify-reviewer", "verify-qa", *SPECIALIST_AGENTS):
             _, body = parse_frontmatter(AGENTS / f"{name}.md")
             self.assertIn("apply_patch", body, name)
             self.assertIn("AGENTS.md", body, name)

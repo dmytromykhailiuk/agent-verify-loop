@@ -1,6 +1,6 @@
 {
   "name": "agent-verify-loop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Independent verification loop for coding agents: triage, an independent reviewer and QA agent, and a Stop gate. For Claude Code and Codex.",
   "author": {
     "name": "dmytromykhailiuk"

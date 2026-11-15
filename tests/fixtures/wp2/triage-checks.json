@@ -4,5 +4,6 @@
   "qa": {"scope": "checks", "reason": "service logic only; related tests cover it", "focus": ["sum handles negatives"],
          "needs_login": false},
   "review": {"tier": "standard", "reason": "small service change", "focus": ["edge cases"]},
+  "specialists": {"security": {"run": false, "reason": "no auth, input or secrets touched", "focus": []}, "perf": {"run": false, "reason": "constant-time arithmetic", "focus": []}, "ux": {"run": false, "ui_spec": "n/a", "reason": "no UI files changed", "focus": []}},
   "confidence": "high"
 }

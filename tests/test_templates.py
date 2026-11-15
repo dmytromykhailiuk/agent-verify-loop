@@ -21,8 +21,11 @@ COMMON = ("run_id attempt mode repo_root repo_slug branch code_ref_note run_dir 
           "disputes user_guidance lessons vault_notes repo_claude_md").split()
 ALLOWED = {
     "triage": set("run_id attempt repo_slug user_prompts brief diff_stat changed_files signals project_facts "
-                  "auth_status diff_excerpt previous_plan delta_stat".split()),
-    "reviewer": set(COMMON + "review_tier baseline_note outside_files".split()),
+                  "auth_status diff_excerpt previous_plan delta_stat security_files ui_spec_hints perf_hints "
+                  "calibration".split()),
+    "reviewer": set(COMMON + "review_tier baseline_note outside_files specialist_note".split()),
+    "specialist": set(COMMON + "review_tier baseline_note outside_files role charter_focus advisory_note id_prefix "
+                               "suggestion_prefix".split()),
     "qa": set(COMMON + "qa_scope qa_reason project_facts verify_json recipes app_url auth_status artifacts_dir "
                        "logs_dir browser_note".split()),
 }
@@ -30,6 +33,7 @@ ALLOWED = {
 REQUIRED = {
     "triage": ALLOWED["triage"],
     "reviewer": ALLOWED["reviewer"],
+    "specialist": ALLOWED["specialist"],
     "qa": ALLOWED["qa"],
 }
 # Required literal text per template (§2.15.1 "Template structure").
@@ -37,6 +41,9 @@ PHRASES = {
     "triage": ["Answer with the JSON object only."],
     "reviewer": ["implementer claims — verify them", "summaries only, do not open the vault",
                  "write the file, then end with a ≤10-line summary and the same JSON in a ```json fence"],
+    "specialist": ["implementer claims — verify them", "summaries only, do not open the vault",
+                   "stay inside your charter",
+                   "write the file, then end with a ≤10-line summary and the same JSON in a ```json fence"],
     "qa": ["implementer claims — verify them", "summaries only, do not open the vault",
            "write the file, then end with a ≤10-line summary and the same JSON in a ```json fence"],
 }
@@ -91,12 +98,18 @@ class TemplateTest(HermeticCase):
 
     def test_block_order(self):
         order = {
-            "triage": ["user_prompts", "brief", "diff_stat", "changed_files", "signals", "project_facts",
+            "triage": ["user_prompts", "brief", "diff_stat", "changed_files", "signals", "security_files",
+                       "ui_spec_hints", "perf_hints", "calibration", "project_facts",
                        "auth_status", "previous_plan", "delta_stat", "diff_excerpt"],
             "reviewer": ["run_id", "repo_root", "code_ref_note", "time_budget_min", "review_tier", "user_prompts",
-                         "brief", "focus", "diff_summary", "patch_path", "baseline_note", "outside_files",
+                         "brief", "focus", "specialist_note", "diff_summary", "patch_path", "baseline_note", "outside_files",
                          "delta_path", "previous_findings", "fix_notes", "disputes", "user_guidance",
                          "repo_claude_md", "vault_notes", "lessons", "verdict_path"],
+            "specialist": ["role", "run_id", "repo_root", "code_ref_note", "time_budget_min", "review_tier",
+                           "charter_focus", "advisory_note", "user_prompts", "brief", "focus", "diff_summary",
+                           "patch_path", "baseline_note", "outside_files", "delta_path", "previous_findings",
+                           "fix_notes", "disputes", "user_guidance", "repo_claude_md", "vault_notes", "lessons",
+                           "verdict_path", "id_prefix", "suggestion_prefix"],
             "qa": ["run_id", "qa_scope", "repo_root", "code_ref_note", "time_budget_min", "qa_reason", "user_prompts", "brief",
                    "focus", "diff_summary", "patch_path", "delta_path", "previous_findings", "fix_notes",
                    "disputes", "user_guidance", "repo_claude_md", "project_facts", "verify_json", "recipes",

@@ -19,7 +19,10 @@
     "role": {
       "type": "string",
       "enum": [
-        "reviewer"
+        "reviewer",
+        "security",
+        "perf",
+        "ux"
       ]
     },
     "run_id": {
@@ -71,7 +74,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^R[0-9]+$"
+            "pattern": "^(R|SC|PF|UX)[0-9]+$"
           },
           "severity": {
             "type": "string",
@@ -102,7 +105,9 @@
               "tests",
               "performance",
               "maintainability",
-              "other"
+              "other",
+              "accessibility",
+              "usability"
             ]
           },
           "file": {
@@ -167,6 +172,18 @@
           "missed_reason": {
             "type": "string",
             "maxLength": 500
+          },
+          "evidence_ref": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "measurement": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "wcag": {
+            "type": "string",
+            "maxLength": 200
           }
         }
       }
@@ -184,7 +201,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^S[0-9]+$"
+            "pattern": "^(S|SCS|PFS|UXS)[0-9]+$"
           },
           "file": {
             "type": "string",

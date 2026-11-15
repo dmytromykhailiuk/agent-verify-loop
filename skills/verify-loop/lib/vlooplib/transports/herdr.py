@@ -9,6 +9,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from ..roles import REVIEW_ROLES
 from . import common
 from .base import HookContext, SpawnResult, Transport
 
@@ -16,7 +17,8 @@ EXIT_STATUS = {0: "done", 3: "blocked", 4: "timeout", 5: "dead", 6: "no_result",
 MIN_INTEGRATION = 1
 ENV_STRIP = ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "HERDR_AGENT_DIR",
              "HERDR_AGENT_ID", "HERDR_AGENT_DEPTH", "HERDR_PARENT_SESSION_ID", "HERDR_ROOT_SESSION_ID"]
-HERDR_ROLES = {"reviewer": "verify-review", "qa": "verify-qa", "retro": "vault-retro"}
+HERDR_ROLES = {"reviewer": "verify-review", "security": "verify-security", "perf": "verify-perf", "ux": "verify-ux",
+               "qa": "verify-qa", "retro": "vault-retro"}
 RETRO_TOOLS = ["Bash(git log *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git ls-files *)", "Bash(git grep *)",
                "Bash(git rev-parse *)", "Bash(git status *)", "Bash(wc *)", "Bash(sort *)", "Bash(uniq *)",
                "Bash(head *)", "Bash(grep *)", "Bash(awk *)"]
@@ -129,13 +131,13 @@ def retro_tools() -> list[str]:
 
 
 def role_cmd(role: str, *, run_dir: Path, att_dir: Path, repo_root: str, model: str, effort: str, cfg: dict) -> list[str]:
-    """herdr-agent command for the reviewer or QA of one attempt."""
+    """herdr-agent command for a review role or QA of one attempt."""
     t = (cfg.get("timeouts_s") or {}).get(role, 1200)
     prompt = common.task_prompt(Path(att_dir) / f"{role}.prompt.md")
     cmd = [_bin(), "run", HERDR_ROLES[role], "--model", model, "--effort", effort, "--cwd", str(repo_root),
            "--timeout", str(int(t)), "--json", "--prompt", prompt, "--",
            "--agent", common.agent_name(role), "--permission-mode", str(cfg.get("permission_mode") or "auto")]
-    if role == "reviewer":
+    if role in REVIEW_ROLES:
         return cmd + ["--strict-mcp-config", "--allowedTools", *common.claude_tools(role, run_dir)]
     mcp = Path(att_dir) / "mcp.json"
     if cfg.get("qa_mcp_transport", "mcp-config") == "mcp-config":

@@ -14,7 +14,8 @@ from .base import task_prompt
 
 BIN_ENV = "VERIFY_CODEX_BIN"
 TRIAGE_SCHEMA = "triage.codex.schema.json"
-SANDBOX = {"reviewer": "read-only", "qa": "workspace-write", "triage": "read-only"}
+SANDBOX = {"reviewer": "read-only", "security": "read-only", "perf": "read-only", "ux": "read-only",
+           "qa": "workspace-write", "triage": "read-only"}
 _BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -95,7 +96,7 @@ def triage_cmd(prefix: list[str] | None, cfg: dict, schema_json: str, prompt: st
            "-o", triage_out_file(), "--json", "-s", "read-only", "--skip-git-repo-check", "--ephemeral"]
     if t.get("model"):
         cmd += ["-m", str(t["model"])]
-    return cmd + cfg_arg("model_reasoning_effort", str(t.get("effort") or "low"))
+    return cmd + cfg_arg("model_reasoning_effort", str(t.get("effort") or "medium"))
 
 
 def out_file(cmd: list[str]) -> str | None:

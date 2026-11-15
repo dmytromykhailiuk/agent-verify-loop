@@ -6,9 +6,11 @@ import os
 import re
 from pathlib import Path
 
+from ..roles import AGENT, ALL_ROLES, REVIEW_ROLES
+
 PLUGIN = "agent-verify-loop"
-AGENT_TYPES = {"reviewer": "verify-reviewer", "qa": "verify-qa", "triage": "verify-triage", "retro": "vault-keeper"}
-OWN_AGENTS = ("reviewer", "qa", "triage")
+AGENT_TYPES = {**AGENT, "triage": "verify-triage", "retro": "vault-keeper"}
+OWN_AGENTS = (*ALL_ROLES, "triage")
 
 REVIEWER_TOOLS = ["Read", "Grep", "Glob", "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)", "Bash(git grep *)",
                   "Bash(git blame *)", "Bash(git ls-files *)", "Bash(git rev-parse *)", "Bash(git status *)",
@@ -65,7 +67,7 @@ def tmpdir() -> str:
 
 
 def claude_tools(role: str, run_dir) -> list[str]:
-    if role == "reviewer":
+    if role in REVIEW_ROLES:
         return REVIEWER_TOOLS + [rule("Read", run_dir), rule("Edit", run_dir)]
     tmp = tmpdir()
     return QA_TOOLS + [rule("Read", run_dir), rule("Edit", run_dir), rule("Read", tmp), rule("Edit", tmp)]

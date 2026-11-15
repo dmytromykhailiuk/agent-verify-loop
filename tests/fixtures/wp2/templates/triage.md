@@ -39,4 +39,16 @@
 ## delta_stat
 {{delta_stat}}
 
+## security_files
+{{security_files}}
+
+## ui_spec_hints
+{{ui_spec_hints}}
+
+## perf_hints
+{{perf_hints}}
+
+## calibration
+{{calibration}}
+
 Answer with the JSON object only.

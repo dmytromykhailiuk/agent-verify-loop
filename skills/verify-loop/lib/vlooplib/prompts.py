@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import config, paths, util
 from .integrations import vault
+from .roles import ADVISORY_ROLES, PREFIX, REVIEW_ROLES, SPECIALISTS, SUGGESTION_PREFIX
 
 TEMPLATES_DIR: Path | None = None  # tests point this at their own minimal templates
 MAX_ROWS = 80
@@ -117,10 +118,148 @@ def signals(summary: dict) -> str:
     vals = [("files", summary.get("files", 0)), ("added", summary.get("added", 0)),
             ("removed", summary.get("removed", 0)), ("changed_lines", summary.get("changed_lines", 0))]
     for k, key in (("new", "new_files"), ("deleted", "deleted_files"), ("renamed", "renamed_files"),
-                   ("ui", "ui_files"), ("risky", "risky_files"), ("test", "test_files"), ("config", "config_files"),
+                   ("ui", "ui_files"), ("risky", "risky_files"), ("security", "security_files"),
+                   ("test", "test_files"), ("config", "config_files"),
                    ("docs", "docs_files"), ("new_source", "new_source_files")):
         vals.append((k, len(summary.get(key) or [])))
     return "\n".join(f"{k}: {v}" for k, v in vals)
+
+
+HINTS_MAX = 8
+NO_HINTS = "(none found)"
+
+
+def security_files_text(summary: dict) -> str:
+    files = summary.get("security_files") or []
+    if not files:
+        return "(none)"
+    by_path = {r["path"]: r for r in summary.get("rows") or []}
+    lines = [f"- {p} {_cell(by_path.get(p) or {})}" for p in files[:MAX_ROWS]]
+    if len(files) > MAX_ROWS:
+        lines.append(f"… +{len(files) - MAX_ROWS} more")
+    lines.append(f"changed lines in these files (excl. docs/tests): {int(summary.get('security_changed_lines') or 0)}")
+    return "\n".join(lines)
+
+
+_UI_REF = re.compile(r"(?i)\b(figma|mock-?ups?|wireframes?|screenshots?|zeplin|design spec|макет\w*|скріншот\w*|"
+                     r"дизайн\w*)\b|як на|\blike (?:the|in|on)\b")
+_FIGMA_URL = re.compile(r"https?://\S*figma\.com\S*", re.I)
+_IMAGE_PATH = re.compile(r"(?<![\w/])[\w./~-]*[\w-]\.(?:png|jpe?g|gif|webp|svg)\b", re.I)
+_HEX = re.compile(r"(?<![\w&/])#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b")
+_SIZE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?:px|rem|em|vh|vw)\b")
+_UI_COPY = re.compile(r"(?i)\b(?:button|label|title|placeholder|heading|tooltip|caption|message|text|link|tab|"
+                      r"кнопк\w*|напис\w*|текст\w*|заголов\w*|підказк\w*)\b[^\"\n“«]{0,30}[\"“«]([^\"”»\n]{1,60})[\"”»]")
+_UI_WORDS = re.compile(r"(?i)\b(button|click|modal|dialog|page|screen|layout|colou?r|font|align\w*|spacing|margin|"
+                       r"padding|responsive|mobile|hover|focus|icon|tooltip|dropdown|menu|visible|shows?|"
+                       r"displays?|renders?|кнопк\w*|сторінк\w*|екран\w*|модал\w*|колір|шрифт\w*|відображ\w*)\b")
+
+
+def _uniq(items) -> list[str]:
+    out: list[str] = []
+    for x in items:
+        if x not in out:
+            out.append(x)
+    return out
+
+
+def ui_spec_hints(prompts_text: str, brief: str) -> str:
+    """Mechanical evidence of a UI spec in the request and brief: design references, image paths, colours, sizes,
+    quoted UI copy, UI-worded acceptance criteria."""
+    text = f"{prompts_text or ''}\n{brief or ''}"
+    found: list[str] = []
+    refs = _uniq(m.group(0).lower() for m in _UI_REF.finditer(text))
+    if refs:
+        found.append("design references: " + ", ".join(refs[:6]))
+    urls = _uniq(_FIGMA_URL.findall(text))
+    if urls:
+        found.append("figma links: " + ", ".join(urls[:3]))
+    imgs = _uniq(_IMAGE_PATH.findall(text))
+    if imgs:
+        found.append("image paths: " + ", ".join(imgs[:5]))
+    hexes = _uniq("#" + h for h in _HEX.findall(text) if not h.isdigit())
+    if hexes:
+        found.append("colours: " + ", ".join(hexes[:8]))
+    sizes = _uniq(_SIZE.findall(text))
+    if sizes:
+        found.append("sizes: " + ", ".join(sizes[:8]))
+    copy_ = _uniq(f'"{c.strip()}"' for c in _UI_COPY.findall(text) if c.strip())
+    if copy_:
+        found.append("quoted UI copy: " + ", ".join(copy_[:6]))
+    crit = _uniq(ln.strip()[:120] for ln in (brief or "").splitlines()
+                 if re.match(r"\s*(?:[-*]|\d+[.)])\s+", ln) and _UI_WORDS.search(ln))
+    if crit:
+        found += ["UI-worded criterion: " + c.lstrip("-*0123456789.) ") for c in crit[:5]]
+    return "\n".join(f"- {x}" for x in found) if found else "(none found: no design reference in the request or brief)"
+
+
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_LOOP = re.compile(r"(?:^|[^\w.])(?:for|while)\b|\.(?:forEach|map|flatMap|filter|reduce|some|every)\(|"
+                   r"\bfor\s+\w+(?:\s*,\s*\w+)*\s+in\b")
+_IO_CALL = re.compile(r"\bawait\b|\bfetch\(|\baxios\.|\.query\(|\.execute\(|\.find(?:One|Many|All|Unique)?\(|"
+                      r"\.save\(|\.objects\.\w+\(|\brequests\.(?:get|post|put|delete)\(|\bhttp\.(?:get|request)\(|"
+                      r"\.findBy\w*\(|\bcursor\.execute\(")
+_SYNC_IO = re.compile(r"\b(?:readFileSync|writeFileSync|appendFileSync|readdirSync|statSync|existsSync|execSync|"
+                      r"spawnSync)\b|\btime\.sleep\(|\bsubprocess\.(?:run|call|check_output)\(")
+_HEAVY_IMPORT = re.compile(r"^\s*import\s+(?:\*\s+as\s+\w+|[\w{},\s]+)\s+from\s+[\'\"](lodash|moment|rxjs|"
+                           r"@mui/material|@mui/icons-material|antd|chart\.js|three|d3|firebase|aws-sdk|@aws-sdk/[\w-]+)"
+                           r"[\'\"]")
+
+
+def _indent(s: str) -> int:
+    return len(s) - len(s.lstrip(" \t"))
+
+
+def perf_hints(patch: str, summary: dict) -> str:
+    """Regex hints over added lines: IO/await in loops, nested loops, sync IO, heavy client imports."""
+    ui = set(summary.get("ui_files") or [])
+    rows = {r["path"]: r for r in summary.get("rows") or []}
+    hints: list[str] = []
+    for path, lines in _patch_sections(patch or ""):
+        flags = (rows.get(path) or {}).get("flags") or []
+        if "ignored" in flags or "test" in flags or "docs" in flags:
+            continue
+        lineno, window = 0, []
+        for ln in lines:
+            m = _HUNK.match(ln)
+            if m:
+                lineno, window = int(m.group(1)), []
+                continue
+            if not lineno or ln.startswith("\\"):
+                continue
+            if ln.startswith("-"):
+                continue
+            code = ln[1:]
+            added = ln.startswith("+")
+            ind = _indent(code)
+            outer_loops = [w for w in window if _LOOP.search(w[1]) and w[0] < ind]
+            if added and code.strip():
+                where = f"{path}:{lineno}"
+                if _IO_CALL.search(code) and outer_loops:
+                    hints.append(f"{where} IO/await inside a loop: {code.strip()[:80]}")
+                elif _LOOP.search(code) and outer_loops:
+                    hints.append(f"{where} nested loop: {code.strip()[:80]}")
+                if _SYNC_IO.search(code):
+                    hints.append(f"{where} synchronous IO: {code.strip()[:80]}")
+                if (path in ui or path.endswith((".tsx", ".jsx", ".vue", ".svelte"))) and _HEAVY_IMPORT.search(code):
+                    hints.append(f"{where} large client import: {code.strip()[:80]}")
+            if code.strip():
+                window = (window + [(ind, code)])[-8:]
+            lineno += 1
+            if len(hints) >= HINTS_MAX:
+                break
+        if len(hints) >= HINTS_MAX:
+            break
+    hints = _uniq(hints)[:HINTS_MAX]
+    return "\n".join(f"- {h}" for h in hints) if hints else NO_HINTS
+
+
+def calibration_text(project: str | None, cfg: dict) -> str:
+    from . import metrics
+
+    try:
+        return metrics.triage_calibration(project, last=int((cfg.get("triage") or {}).get("calibration_runs", 30)))
+    except Exception as e:  # noqa: BLE001 - calibration is a hint; triage must not fail on a bad ledger
+        return f"(unavailable: {type(e).__name__})"
 
 
 def _patch_sections(patch: str) -> list[tuple[str, list[str]]]:
@@ -227,10 +366,14 @@ def claude_md_files(repo_root: str, paths: list[str]) -> str:
     return "\n".join(found)
 
 
-def previous_findings(judge: dict | None) -> str:
+def previous_findings(judge: dict | None, role: str | None = None) -> str:
+    """Open findings of the previous judge. A specialist sees only its own; the reviewer and QA see theirs."""
+    keep = None if role is None else {role} if role in SPECIALISTS else {"reviewer", "qa"}
     out = []
     for f in (judge or {}).get("findings") or []:
         if f.get("waived"):
+            continue
+        if keep is not None and (f.get("role") or "reviewer") not in keep:
             continue
         anchor = (f"{f.get('file')}:{f.get('line')}" if f.get("file") and f.get("line") else f.get("file")) or (
             f"check {f['check_id']}" if f.get("check_id") else "(no anchor)")
@@ -263,15 +406,19 @@ def render_triage(*, run_dir: Path, ctx: dict, attempt: int, summary: dict, cfg:
     auth_line = a.get("status") or "missing"
     if a.get("exists"):
         auth_line += f" (saved {a.get('age_days')} days ago)"
+    prompts_text = _read(Path(run_dir) / "prompts.md")
+    brief = _read(Path(run_dir) / "brief.md")
+    patch = _read(att / "diff.patch")
     values = {
         "run_id": ctx["run_id"], "attempt": str(attempt), "repo_slug": ctx["repo"]["slug"],
-        "user_prompts": capped_prompts(_read(Path(run_dir) / "prompts.md")),
-        "brief": _read(Path(run_dir) / "brief.md"),
+        "user_prompts": capped_prompts(prompts_text), "brief": brief,
+        "security_files": security_files_text(summary), "ui_spec_hints": ui_spec_hints(prompts_text, brief),
+        "perf_hints": perf_hints(patch, summary), "calibration": calibration_text(ctx["repo"].get("slug"), cfg),
         "diff_stat": diff_summary(summary, ctx["target"].get("base_kind"), ctx["target"].get("base_at")),
         "changed_files": changed_files(summary), "signals": signals(summary),
         "project_facts": json.dumps(project, indent=2, ensure_ascii=False), "auth_status": auth_line,
-        "diff_excerpt": diff_excerpt(_read(att / "diff.patch"), summary, int(t.get("diff_excerpt_max_lines", 400)),
-                                     int(t.get("diff_excerpt_max_chars", 24000))),
+        "diff_excerpt": diff_excerpt(patch, summary, int(t.get("diff_excerpt_max_lines", 900)),
+                                     int(t.get("diff_excerpt_max_chars", 60000))),
         "previous_plan": previous_plan, "delta_stat": delta_stat(delta) if delta else "",
     }
     text = render(_read(template_path("triage")), {**tool_values(), **values})
@@ -293,8 +440,44 @@ def _outside(ctx: dict, summary: dict) -> str:
     return "\n".join(f"- {r['path']}" for r in summary.get("rows") or [] if r["path"] not in touched)
 
 
+SPECIALIST_NOTES = {
+    "security": "A security specialist reviews this change in parallel. Skip §3.5 (Security) of your checklist: "
+                "raise a security problem only when it is also a correctness or data bug you traced yourself.",
+    "perf": "A performance specialist reviews this change in parallel. Skip §3.7 (Performance traps).",
+    "ux": "A UX specialist reviews this change in parallel. Leave accessibility, UI states, visual consistency and "
+          "UI copy to it; still block on UI logic that is functionally broken.",
+}
+
+CHARTERS = {
+    "security": ("Security of the change: injection (SQL, shell, template, path), authentication and authorization "
+                 "bypass, session and token handling, secrets in code or logs, crypto misuse, unsafe "
+                 "deserialization, SSRF, XSS, open redirects, permissive CORS or CSP, CI workflow injection, "
+                 "dependency or permission changes. Trace untrusted input from its entry point to the sink."),
+    "perf": ("Performance of the change on hot paths: N+1 queries, IO or await inside loops, unbounded loops or "
+             "result sets, quadratic work on growing data, synchronous IO in request handlers, missing pagination "
+             "or caching where the code already caches, memory growth, heavy client bundles and re-render storms. "
+             "Advisory only: your findings never block."),
+    "ux": ("User experience of the UI change, read from the code (no browser): labels, alt text and aria, focus "
+           "order and keyboard access, loading / empty / error / disabled states, consistency with sibling "
+           "components and design tokens, responsive CSS, and UI copy. Advisory only: your findings never block."),
+}
+
+
+def specialist_note(running: list[str] | None) -> str:
+    return "\n".join(f"- {SPECIALIST_NOTES[r]}" for r in SPECIALISTS if r in (running or []))
+
+
+def _charter_focus(role: str, spec: dict) -> str:
+    lines = [CHARTERS[role]]
+    if role == "ux" and spec.get("ui_spec") not in (None, "", "n/a"):
+        lines.append(f"UI spec in the request or brief (triage): {spec['ui_spec']}.")
+    if spec.get("reason"):
+        lines.append(f"Why triage turned you on: {spec['reason']}")
+    return "\n\n".join(lines)
+
+
 def render_role(role: str, *, run_dir: Path, ctx: dict, attempt: int, plan: dict, cfg: dict, project: dict,
-                auth: dict | None = None) -> Path:
+                auth: dict | None = None, specialists: list[str] | None = None) -> Path:
     run_dir = Path(run_dir)
     att = run_dir / f"attempt-{attempt}"
     pr = plan["roles"][role]
@@ -309,7 +492,8 @@ def render_role(role: str, *, run_dir: Path, ctx: dict, attempt: int, plan: dict
                  f"(the working tree may differ).")
     timeout = int(pr.get("timeout_s") or (cfg.get("timeouts_s") or {}).get(role, 1200))
     standalone = ctx.get("standalone") or {}
-    tri_part = triage.get("review" if role == "reviewer" else "qa") or {}
+    spec = ((triage.get("specialists") or {}).get(role) or {}) if role in SPECIALISTS else {}
+    tri_part = spec if role in SPECIALISTS else triage.get("review" if role == "reviewer" else "qa") or {}
     focus_items = pr.get("focus") if role == "qa" and pr.get("focus") else tri_part.get("focus") or []
     source_paths = list(summary.get("source_files") or [])
     all_paths = [r["path"] for r in summary.get("rows") or []]
@@ -324,7 +508,7 @@ def render_role(role: str, *, run_dir: Path, ctx: dict, attempt: int, plan: dict
                          diff_summary(summary, tgt.get("base_kind"), tgt.get("base_at"))),
         "patch_path": "(no code diff)" if standalone.get("exploratory") else str(att / "diff.patch"),
         "delta_path": str(att / "delta.patch") if attempt >= 2 and (att / "delta.patch").exists() else "",
-        "previous_findings": previous_findings(prev_judge),
+        "previous_findings": previous_findings(prev_judge, role),
         "fix_notes": _read(att / "fix-notes.md"),
         "disputes": "\n".join(f"- {k}: {(v or {}).get('reason') if isinstance(v, dict) else v}"
                               for k, v in (ctx.get("disputes") or {}).items()),
@@ -333,13 +517,23 @@ def render_role(role: str, *, run_dir: Path, ctx: dict, attempt: int, plan: dict
         "vault_notes": vault_notes(repo["root"], source_paths),
         "repo_claude_md": claude_md_files(repo["root"], all_paths),
     }
-    if role == "reviewer":
+    if role in REVIEW_ROLES:
         tier = pr.get("tier") or "standard"
         values.update({
             "review_tier": f"{tier} ({pr.get('model')})" + (f" — {pr['reason']}" if pr.get("reason") else ""),
             "baseline_note": BASELINE_NOTE if tgt.get("base_kind") == "head-fallback" else "",
             "outside_files": _outside(ctx, summary),
         })
+        if role == "reviewer":
+            values["specialist_note"] = specialist_note(specialists)
+        else:
+            values.update({
+                "role": role, "charter_focus": _charter_focus(role, spec), "id_prefix": PREFIX[role],
+                "suggestion_prefix": SUGGESTION_PREFIX[role],
+                "advisory_note": ("Advisory role: your findings are reported but never block the loop. Still use "
+                                  "honest severities." if role in ADVISORY_ROLES else
+                                  "Blocking findings must meet the security evidence rules in your system prompt."),
+            })
     else:
         scope = pr.get("scope") or "checks"
         vj = _repo_config_text(repo["root"])
@@ -361,7 +555,7 @@ def render_role(role: str, *, run_dir: Path, ctx: dict, attempt: int, plan: dict
             "auth_status": auth_text(scope, auth, repo["slug"], login),
             "artifacts_dir": str(att / "qa-artifacts"), "logs_dir": str(att / "qa-logs"), "browser_note": note,
         })
-    text = render(_read(template_path(role)), {**tool_values(), **values})
+    text = render(_read(template_path("specialist" if role in SPECIALISTS else role)), {**tool_values(), **values})
     out = att / f"{role}.prompt.md"
     util.atomic_write_text(out, text)
     return out

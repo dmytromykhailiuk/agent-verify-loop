@@ -58,12 +58,12 @@ class ClaudePlatform(Platform):
     def triage_cmd(self, prefix: list[str] | None, cfg: dict, schema_json: str, prompt: str) -> list[str]:
         t = cfg.get("triage") or {}
         prefix = prefix or [t.get("claude_bin") or "claude"]
-        return [*prefix, "-p", "--agent", "verify-triage", "--model", str(t.get("model") or "haiku"),
-                "--effort", str(t.get("effort") or "low"), "--output-format", "json", "--json-schema", schema_json,
+        return [*prefix, "-p", "--agent", "verify-triage", "--model", str(t.get("model") or "sonnet"),
+                "--effort", str(t.get("effort") or "medium"), "--output-format", "json", "--json-schema", schema_json,
                 "--tools", "Read,Grep,Glob,StructuredOutput", "--strict-mcp-config",
                 "--settings", '{"disableAllHooks":true}',
                 "--permission-mode", "default", "--permission-prompts", "none", "--no-session-persistence",
-                "--max-budget-usd", str(t.get("max_budget_usd", 0.15)), prompt]
+                "--max-budget-usd", str(t.get("max_budget_usd", 0.60)), prompt]
 
     def headless_cmd(self, role: str, *, agent: str, model: str, effort: str, prompt: str,
                      mcp_config: str | Path | None = None, allowed_tools: list[str] | None = None,

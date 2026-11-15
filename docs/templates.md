@@ -1,8 +1,9 @@
 # Prompt templates
 
 `vloop brief` renders one task file per verifier from the templates in
-`skills/verify-loop/prompts/{triage,reviewer,qa,retro}.md`. The verifier's role instructions live in the agent files
-(`skills/verify-loop/agents/`); the task file carries the data of the run.
+`skills/verify-loop/prompts/{triage,reviewer,specialist,qa,retro}.md`. The security, perf and UX specialist reviewers
+share `specialist.md` (`{{role}}`, `{{charter_focus}}`, `{{id_prefix}}`). The verifier's role instructions live in the
+agent files (`skills/verify-loop/agents/`); the task file carries the data of the run.
 
 ## Placeholders
 
@@ -25,7 +26,8 @@ empty or only whitespace. It is kept, without the markers, when `name` has conte
 
 The reviewer and QA templates use this for `vault_notes` (summaries of agent-vault notes covering the changed code)
 and `lessons` (lessons from past retros). Without agent-vault both values are empty, so the task file simply has no
-vault sections. Blocks do not nest and have no `else`; the condition is a single placeholder name (letters, digits,
+vault sections. The reviewer template also wraps `specialist_note` this way: it tells the generalist reviewer which
+checklist sections to skip because a specialist runs, and is empty when none does. Blocks do not nest and have no `else`; the condition is a single placeholder name (letters, digits,
 `.`, `_`, `-`).
 
 The retro template fills `{{vloop}}`, `{{vault_cli}}` and `{{vault_ops_retro}}` the same way: the vault ones are empty

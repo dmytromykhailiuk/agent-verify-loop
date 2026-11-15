@@ -135,6 +135,213 @@
             }
           }
         },
+        "security": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "state",
+            "carried",
+            "carried_from",
+            "verdict_path",
+            "blocking",
+            "minor",
+            "suggestions",
+            "downgraded",
+            "reasons"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "pass",
+                "fail",
+                "inconclusive",
+                "skipped"
+              ]
+            },
+            "carried": {
+              "type": "boolean"
+            },
+            "carried_from": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "verdict_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "blocking": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minor": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "suggestions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "downgraded": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "modified_files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "perf": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "state",
+            "carried",
+            "carried_from",
+            "verdict_path",
+            "blocking",
+            "minor",
+            "suggestions",
+            "downgraded",
+            "reasons"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "pass",
+                "fail",
+                "inconclusive",
+                "skipped"
+              ]
+            },
+            "carried": {
+              "type": "boolean"
+            },
+            "carried_from": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "verdict_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "blocking": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minor": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "suggestions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "downgraded": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "modified_files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "ux": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "state",
+            "carried",
+            "carried_from",
+            "verdict_path",
+            "blocking",
+            "minor",
+            "suggestions",
+            "downgraded",
+            "reasons"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "pass",
+                "fail",
+                "inconclusive",
+                "skipped"
+              ]
+            },
+            "carried": {
+              "type": "boolean"
+            },
+            "carried_from": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "verdict_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "blocking": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minor": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "suggestions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "downgraded": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "modified_files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "qa": {
           "type": "object",
           "additionalProperties": true,
@@ -226,6 +433,9 @@
             "type": "string",
             "enum": [
               "reviewer",
+              "security",
+              "perf",
+              "ux",
               "qa"
             ]
           },

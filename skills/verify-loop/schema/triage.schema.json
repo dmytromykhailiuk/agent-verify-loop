@@ -138,6 +138,103 @@
         }
       }
     },
+    "specialists": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "security": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "run",
+            "reason",
+            "focus"
+          ],
+          "properties": {
+            "run": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "focus": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "maxItems": 5
+            }
+          }
+        },
+        "perf": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "run",
+            "reason",
+            "focus"
+          ],
+          "properties": {
+            "run": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "focus": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "maxItems": 5
+            }
+          }
+        },
+        "ux": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "run",
+            "ui_spec",
+            "reason",
+            "focus"
+          ],
+          "properties": {
+            "run": {
+              "type": "boolean"
+            },
+            "ui_spec": {
+              "type": "string",
+              "enum": [
+                "clear",
+                "partial",
+                "none",
+                "n/a"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "focus": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "maxItems": 5
+            }
+          }
+        }
+      }
+    },
     "confidence": {
       "type": "string",
       "enum": [
