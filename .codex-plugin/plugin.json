@@ -1,6 +1,6 @@
 {
   "name": "agent-verify-loop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Independent verification loop for coding agents: the verify-* skills and hooks. Install the agents with `vloop setup --agent codex --only agents`.",
   "author": {
     "name": "dmytromykhailiuk"

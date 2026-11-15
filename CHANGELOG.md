@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 — 2026-11-15
+
 - agent-cost integration (export contract 1): with `cost_source` `auto` (default) or `agent-cost`, USD, tokens and
   wall/active/waiting/idle time of the main session and the loop's agents come from `agent-cost export` (until the
   run's close; `waiting_ms` missing → 0; the run window takes all four times from agent-cost); triage keeps its
